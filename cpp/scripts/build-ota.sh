@@ -194,10 +194,19 @@ case "$1" in
         ;;
     --update)
         echo "=== AKA-00 OTA 升级 ==="
-        touch /tmp/aka-ota-lock            # 让守护脚本暂停拉起（若还在跑）
+        # 锁/安装脚本/固件全在 $AKA_HOME/.ota（磁盘），不再碰 /tmp：
+        # 板上 /tmp 是 tmpfs（内存盘，53MB），把 ~20MB 的固件放那儿实测把内存打爆过
+        # （oom-kill 掉 aka-capp）。锁也因此从 tmpfs 挪到磁盘 —— 那边不再"重启自动清"，
+        # 陈旧锁由 init.sh 启动时清（见 cpp/board/init.sh 的 LOCK_FILE 处）。
+        mkdir -p "$AKA_HOME/.ota"
+        touch "$AKA_HOME/.ota/aka-ota-lock"   # 让守护脚本暂停拉起（若还在跑）
         stop_service
         swap_in
-        rm -f /tmp/aka-ota-lock /tmp/aka-ota-install.sh /tmp/aka-ota-update
+        # 暂存文件换包后都落在回滚点目录里，删掉省 ~20MB。删的是**正跑着的自己** ——
+        # Linux 上 unlink 后 inode 仍在，本脚本能读完，安全。
+        rm -f "$AKA_HOME.old/.ota/aka-ota-update" \
+              "$AKA_HOME.old/.ota/aka-ota-install.sh" \
+              "$AKA_HOME.old/.ota/aka-ota-lock"
         echo "[ota] 重启服务..."
         exec "$AKA_HOME/init.sh"
         ;;

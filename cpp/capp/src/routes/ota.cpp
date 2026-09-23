@@ -110,19 +110,41 @@ Json fetch_release_info(AppContext& ctx) {
 }
 
 // OTA 重启脚本（对应 Python _write_restart_script，杀掉旧 capp 再跑 update）
-void write_restart_script(const std::string& firmware_path) {
+void write_restart_script(AppContext& ctx, const std::string& firmware_path) {
     const char* server_name = getenv("AKA_SERVER_NAME");
     std::string name = server_name ? server_name : "aka-capp";
 
-    std::string update_path = "/tmp/aka-ota-update";
-    std::string mv = "mv -f \"" + firmware_path + "\" " + update_path;
+    // 固件暂存放在 $AKA_HOME/.ota（磁盘），**不能放 /tmp**。
+    //
+    // 板上 /tmp 是 tmpfs —— 内存盘（`df` 实测：tmpfs 53M 挂在 /tmp），而这个安装器
+    // 有 ~20MB。原来是 `mv … /tmp/aka-ota-update`：跨文件系统（rootfs → tmpfs）
+    // 的 mv 不是改名而是"读进来再写出"，等于把 20MB 固件搬进内存，占掉 tmpfs 的
+    // 37%、整机内存的 19%。板上实测踩到（107MB 内存）：
+    //     oom-kill: task=aka-capp … Out of memory: Killed process …(anon-rss:44168kB)
+    //     aka-capp: unhandled signal 7 (SIGBUS)     ← 升级过程被 OOM 打断
+    //
+    // 放到 firmware_path 同目录还多一个好处：mv 退化成**同文件系统的 rename** ——
+    // 零拷贝、零内存、原子。
+    //
+    // 整条链路（固件 + 锁 + 安装脚本）都在 $AKA_HOME/.ota，**一处都不留 /tmp**。
+    //
+    // 锁挪过来要注意：原来在 /tmp（tmpfs）时重启自动清，磁盘上不会留陈旧锁；
+    // 现在在磁盘上就必须自己清 —— cpp/board/init.sh 启动时会 `rm -f` 一次，
+    // 那边有详细说明，改这两处中的任何一处都要一起看。
+    std::string ota_dir = ctx.app_dir + "/.ota";
+    std::string update_path = ota_dir + "/aka-ota-update";
+    std::string lock_path = ota_dir + "/aka-ota-lock";
+    std::string script_path = ota_dir + "/aka-ota-install.sh";
+
+    std::string mv = "mkdir -p \"" + ota_dir + "\" && mv -f \"" + firmware_path +
+                     "\" \"" + update_path + "\"";
     system(mv.c_str());
     chmod(update_path.c_str(), 0755);
 
-    std::ofstream f("/tmp/aka-ota-install.sh");
+    std::ofstream f(script_path.c_str());
     f << "#!/bin/sh\n"
          "set -e\n"
-         "LOCK_FILE=\"/tmp/aka-ota-lock\"\n"
+         "LOCK_FILE=\"" << lock_path << "\"\n"
          "touch \"$LOCK_FILE\"\n"
          "sleep 3\n"
          "killall " << name << " 2>/dev/null || true\n"
@@ -130,8 +152,8 @@ void write_restart_script(const std::string& firmware_path) {
          "killall -9 " << name << " 2>/dev/null || true\n"
          "exec " << update_path << " --update\n";
     f.close();
-    chmod("/tmp/aka-ota-install.sh", 0755);
-    system("/bin/sh /tmp/aka-ota-install.sh >/dev/null 2>&1 &");
+    chmod(script_path.c_str(), 0755);
+    system(("/bin/sh " + script_path + " >/dev/null 2>&1 &").c_str());
 }
 
 // ── OTA 升级 ──
@@ -333,7 +355,7 @@ void register_ota_routes(Router& router, AppContext& ctx) {
                     st["task_id"] = task_id;
                     sf << st.dump(false);
                 }
-                write_restart_script(tmp_path);
+                write_restart_script(ctx, tmp_path);
                 std::lock_guard<std::mutex> lk(ctx.ota_mu);
                 ctx.ota_tasks[task_id]["progress"] = csrc::Json((int64_t)100);
                 ctx.ota_tasks[task_id]["status"] = "done";
@@ -393,7 +415,7 @@ void register_ota_routes(Router& router, AppContext& ctx) {
                     st["task_id"] = task_id;
                     sf << st.dump(false);
                 }
-                write_restart_script(tmp_path);
+                write_restart_script(ctx, tmp_path);
                 std::lock_guard<std::mutex> lk(ctx.ota_mu);
                 ctx.ota_tasks[task_id]["progress"] = csrc::Json((int64_t)100);
                 ctx.ota_tasks[task_id]["status"] = "done";

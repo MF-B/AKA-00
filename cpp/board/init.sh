@@ -2,7 +2,7 @@
 # =============================================================================
 # AKA-00 capp 启动脚本（SG2002 板子）
 #
-# 自愈循环：capp 崩溃自动重启。OTA 进行中（/tmp/aka-ota-lock 存在）时等待。
+# 自愈循环：capp 崩溃自动重启。OTA 进行中（$AKA_HOME/.ota/aka-ota-lock 存在）时等待。
 #
 # 用法:
 #   AKA_HOME=$HOME/AKA-00 ./init.sh
@@ -10,7 +10,12 @@
 
 AKA_HOME="${AKA_HOME:-$HOME/AKA-00}"
 BIN="$AKA_HOME/aka-capp"
-LOCK_FILE="/tmp/aka-ota-lock"
+# OTA 锁。**原来在 /tmp** —— 那时是 tmpfs（内存盘），重启自动清掉，所以"陈旧锁"
+# 不可能存在。现在整条 OTA 链路的暂存都从 /tmp 挪到了 $AKA_HOME/.ota（板上 /tmp 只有
+# 53MB 内存盘，20MB 的固件放那儿实测把内存打爆过），锁也跟着挪了 —— 于是**必须自己
+# 处理陈旧锁**：磁盘上的文件跨得过重启，而这个循环是纯存在性检查、没有超时逃逸，
+# 一个陈旧的锁会让 capp 永远起不来。下面启动时清一次。
+LOCK_FILE="$AKA_HOME/.ota/aka-ota-lock"
 PID_FILE="/var/run/aka-capp.pid"
 
 # 防止重复实例：**必须查 init.sh 自己的 pid，不能查 capp 的**。
@@ -26,7 +31,13 @@ if [ -f "$INIT_PID_FILE" ]; then
         exit 0
     fi
 fi
-echo $$ > "$INIT_PID_FILE" 
+echo $$ > "$INIT_PID_FILE"
+
+# 清陈旧 OTA 锁（理由见上面 LOCK_FILE 处）。为什么这里清是安全的：
+# 锁只对"正在进行的那一次 OTA"有意义，跨不过一次重启；而上面刚做过单实例保护，
+# 所以能走到这行说明要么是开机、要么是 OTA 自己 exec 过来的 —— 后者那时安装器
+# 已经把锁删了。两种情况下那个残留的锁都是死锁，必须清。
+rm -f "$LOCK_FILE" 2>/dev/null || true
 
 if [ ! -x "$BIN" ]; then
     # 兜底：scp/tar/zip 传输可能丢可执行位
