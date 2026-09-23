@@ -11,6 +11,7 @@
 #include "capp/context.hpp"
 #include "capp/http_server.hpp"
 #include "capp/routes.hpp"
+#include "csrc/https_client.hpp"
 #include "csrc/log.hpp"
 #include "csrc/system_utils.hpp"
 
@@ -35,8 +36,12 @@ int main() {
     ctx.app_dir = getenv("AKA_HOME") ? getenv("AKA_HOME") : ".";
     ctx.static_dir = ctx.app_dir + "/static";
 
+    // HTTPS 客户端的 CA 包（随包分发，见 cpp/board/cacert.pem）。
+    // OTA 查更新/下载、状态上报都走 https，没有它一律失败（且失败原因会是"证书校验不过"）。
+    csrc::set_ca_bundle(ctx.app_dir + "/cacert.pem");
+
     CAM_INFO("╔══════════════════════════════════╗");
-    CAM_INFO("║  AKA-00 capp (C++ standalone)   ║");
+    CAM_INFO("║  AKA-00 capp (C++ standalone)    ║");
     CAM_INFO("╚══════════════════════════════════╝");
 
     // 服务层（硬件 + 状态采集）

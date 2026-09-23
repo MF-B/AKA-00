@@ -14,6 +14,7 @@
 #include <netdb.h>
 #include <unistd.h>
 
+#include "csrc/https_client.hpp"
 #include "csrc/log.hpp"
 #include "csrc/system_utils.hpp"
 
@@ -213,14 +214,8 @@ HttpResult http_get(const std::string& url, int timeout_sec) {
     Url u;
     if (!Url::parse(url, u)) return {false, 0, "", "invalid url"};
     if (u.scheme == "https") {
-        // curl 兜底
-        std::string out = exec_output("curl -sS -m " + std::to_string(timeout_sec) +
-                                      " \"" + url + "\" 2>&1");
-        HttpResult r;
-        r.ok = !out.empty();
-        r.body = out;
-        if (!r.ok) r.error = "curl failed";
-        return r;
+        // 走 mbedtls（原来是 curl 兜底，但板子上的 libcurl 没编 TLS 后端，https 根本不可用）
+        return https_exchange(u, "GET", "", "", "", nullptr, timeout_sec);
     }
     std::string req = "GET " + u.path + " HTTP/1.1\r\n"
                       "Host: " + u.host + "\r\n"
@@ -234,20 +229,7 @@ HttpResult http_post_json(const std::string& url, const std::string& json_body, 
     Url u;
     if (!Url::parse(url, u)) return {false, 0, "", "invalid url"};
     if (u.scheme == "https") {
-        // 写临时文件再 curl -d @file，避免 shell 转义
-        std::string tmp = "/tmp/aka-post-body.json";
-        {
-            std::ofstream f(tmp, std::ios::binary);
-            f << json_body;
-        }
-        std::string out = exec_output("curl -sS -m " + std::to_string(timeout_sec) +
-                                      " -X POST -H 'Content-Type: application/json' "
-                                      " --data-binary @" + tmp + " \"" + url + "\" 2>&1");
-        HttpResult r;
-        r.ok = !out.empty();
-        r.body = out;
-        if (!r.ok) r.error = "curl failed";
-        return r;
+        return https_exchange(u, "POST", json_body, "application/json", "", nullptr, timeout_sec);
     }
     std::string req = "POST " + u.path + " HTTP/1.1\r\n"
                       "Host: " + u.host + "\r\n"
@@ -264,16 +246,8 @@ HttpResult http_download(const std::string& url, const std::string& dest_path,
     if (!Url::parse(url, u)) return {false, 0, "", "invalid url"};
 
     if (u.scheme == "https") {
-        // curl 下载（无精细进度，完成时回调 100）
-        std::string cmd = "curl -sS -m " + std::to_string(timeout_sec) +
-                          " -o \"" + dest_path + "\" \"" + url + "\" 2>&1";
-        std::string err_out = exec_output(cmd);
-        if (!err_out.empty()) {
-            CAM_WARN("[http] curl download failed: %s", err_out.c_str());
-            return {false, 0, "", err_out};
-        }
-        if (progress_cb) progress_cb(100);
-        return {true, 200, "", ""};
+        // OTA 的 imageUrl 也是 https —— 这条不换的话，能查到更新但下不下来
+        return https_exchange(u, "GET", "", "", dest_path, progress_cb, timeout_sec);
     }
 
     // socket 下载（带进度）

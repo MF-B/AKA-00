@@ -38,8 +38,12 @@ endif
 CXX      := /home/junbo_dai/riscv64-linux-musl-x86_64/bin/riscv64-unknown-linux-musl-g++
 AR       := /home/junbo_dai/riscv64-linux-musl-x86_64/bin/riscv64-unknown-linux-musl-ar
 JPEG_DIR ?= ../third_party/jpeg
+# mbedtls：https_client.cpp（客户端 TLS）要头文件。库由 capp 链接（-lmbedtls ...），
+# 静态库里留未定义符号没问题 —— 这里只需要 include 路径。
+MBEDTLS_DIR ?= ../third_party/mbedtls
 CXXFLAGS := -std=c++17 -O3 -Wall -Wextra -mcpu=c906fdv -MMD -MP -mabi=lp64d \
-            $(SCREEN_DEF) $(TPU_DEF) -Iinclude $(TPU_INC) -I$(JPEG_DIR)/include
+            $(SCREEN_DEF) $(TPU_DEF) -Iinclude $(TPU_INC) -I$(JPEG_DIR)/include \
+            -I$(MBEDTLS_DIR)/include
 ARFLAGS   = rcs
 
 OBJDIR   := build-cross$(SCREEN_SUFFIX)

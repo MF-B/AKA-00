@@ -1,8 +1,8 @@
-// csrc/http_client.hpp — 极简 HTTP 客户端（socket 实现；https 走 curl 兜底）
+// csrc/http_client.hpp — 极简 HTTP 客户端
 //
 // 用途：OTA 版本检查/下载、状态上报、demo 模型下载。
 //   - http://  直接用 socket 实现（含下载进度回调）
-//   - https:// 板上无 TLS 库，走 `curl -sS`（系统需装 curl；不可用时返回错误）
+//   - https:// 走 csrc/https_client（mbedtls 客户端 TLS，见那边的注释）
 //
 // 返回: HttpResult { ok, status, body, error }
 
