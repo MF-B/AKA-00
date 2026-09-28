@@ -1,12 +1,12 @@
 {
   "grab_position": {
-    "servo0": 41,
-    "servo1": 228
+    "servo0": 242,
+    "servo1": 88
   },
   "lift_position": {
-    "servo0": 150,
-    "servo1": 150
+    "servo0": 159,
+    "servo1": 96
   },
-  "gripper_open": 44,
-  "gripper_close": 150
+  "gripper_open": 131,
+  "gripper_close": 8
 }
