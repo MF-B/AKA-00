@@ -47,9 +47,10 @@ SG2002 是一款面向 AIoT 领域的高性能、低功耗 SoC，内置多个处
 - 验证方法
 
   ```
-  # 开发板上执行（利用Python的pyserial库）
-  python3 -m serial.tools.miniterm /dev/ttyS0 115200    # 一般 UARTx 对应 /dev/ttySx
-  
+  # 开发板上验证外设串口（板载 busybox 没有 miniterm，用随包发布的板测工具）
+  ./tools/tt_pid_test /dev/ttyS1 40 3000    # 底盘链路直测，默认 /dev/ttyS1 40 3000
+  ./tools/cam_probe                         # 摄像头出帧直测（跑之前先停 capp）
+
   # 主机上执行（利用minicom）
   minicom -D /dev/ttyUSB0 -b 115200    # 连接串口
   ```

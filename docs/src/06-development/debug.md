@@ -30,20 +30,27 @@ ssh root@<机器人IP>
 
 ## 日志查看
 
-```bash
-# 查看运行日志
-cat app.log
+capp **不写日志文件**，输出直接走 stdout：开机由 `/etc/init.d/S99webstart` 拉起时打在
+**串口控制台**上；手工启动想留一份就自己重定向：
 
-# 实时查看日志
-tail -f app.log
+```bash
+AKA_HOME=$HOME/AKA-00 $HOME/AKA-00/init.sh > /root/aka.log 2>&1 &
+tail -f /root/aka.log
 ```
+
+日志详细程度由 `config.toml` 的 `[logging] level` 控制（默认 `info`）。
 
 ## 测试硬件
 
+板子自带一套板测工具（部署目录的 `tools/`，`make` 打包时一并放进去）：
+
 ```bash
-# 测试电机
-python car_test.py
+./tools/tt_pid_test /dev/ttyS1 40 3000   # 底盘：直发速度看车动不动（绕过 Web 层）
+./tools/cam_probe                        # 摄像头：验证能否出帧
+./tools/screen_test                      # 板载屏：写屏带宽/颜色（仅带屏版）
 ```
+
+> 这些工具会**独占**对应设备，跑之前先停 capp（`$AKA_HOME/stop.sh`）。
 
 ## 网络诊断
 
@@ -57,10 +64,7 @@ curl www.baidu.com
 
 ## HTTPS 证书
 
-如需启用 HTTPS，需生成自签名证书：
-
-```bash
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-    -keyout key.pem -out cert.pem -days 3650 -nodes \
-    -subj "/C=CN/ST=Beijing/L=Beijing/O=MyOrg/OU=MyDept/CN=localhost"
-```
+**不用手工生成**：`init.sh` 启动前会调 `https_init.sh`，缺 `cert.pem`/`key.pem` 时自动
+签一张（EC prime256v1，10 年），已经有的不会被覆盖。要换成 CA 签发的证书，把两个文件
+放到 `$AKA_HOME/` 即可；端口在 `config.toml` 的 `[web] https_port`（默认 443，
+设 0 关闭 HTTPS）。手工重签的命令见[初始化配置](../04-setup/connection.md)。

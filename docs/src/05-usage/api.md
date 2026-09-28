@@ -694,28 +694,48 @@ curl -X POST http://<ip>/api/demo/stop          # 随时打断
 
 ## WiFi
 
+都作用在 **`wlan1`** 上（`wlan0` 是那台给用户连的 AP 热点，不动它）。
+
 ### 扫描网络
 
 ```
-GET /scan
+GET /api/wifi/scan
 ```
+
+```json
+{"list": [{"ssid": "…", "id": "…", "signal": -52, "secured": true, "is_connected": false}],
+ "connected": "…"}
+```
+
+阻塞最多约 5 秒；排序是「已连接优先，其次信号从强到弱」，同名网络只留最强的那个。
 
 ### 连接
 
 ```
-POST /connect
+POST /api/wifi/connect
 Content-Type: application/json
 
 {"ssid": "WiFi名", "password": "密码"}
 ```
 
-无密码时 `password` 为空字符串。
+无密码时 `password` 传空字符串。阻塞约 8 秒等关联、再加最多 6 秒等 DHCP，成功回
+`{"ip": "…"}`（还没拿到地址时回 `"获取中..."`）；失败回 **408** +
+`{"error":"连接超时" | "连接失败，请检查密码或信号" | "未找到该网络"}`。
+
+连接成功会把 `{ssid, password}` 记进 `/etc/aka-wifi.json`（`0600`），capp 每次启动在
+后台重放一次，所以**不用每次开机都重连**（只保留最后一个；`rm` 掉即"忘记网络"）。
 
 ### 状态
 
 ```
-GET /status
-GET /api/ip
+GET /api/wifi/status     # {"ssid": "…"|null, "ip": "…"}
+GET /api/wifi/ip         # {"ip": "…"}（没连上时回热点地址 192.168.4.1）
+```
+
+### 系统 IP
+
+```
+GET /api/system/ip       # {"ip": "…"}
 ```
 
 ---
@@ -725,7 +745,7 @@ GET /api/ip
 ### 当前版本
 
 ```
-GET /api/ota/version
+GET /api/ota/version       # {"version": "v0.6.1", "updated": 1730000000, "service": "AKA-00"}
 ```
 
 ### 检查更新
@@ -734,16 +754,39 @@ GET /api/ota/version
 GET /api/ota/check
 ```
 
+去 `config.toml` 的 `[ota] check_url` 取版本信息，比语义版本号（退而比 `updatedAt`）：
+
+```json
+{"current_version": "…", "update_available": true, "latest_version": "…",
+ "hardware_desc": "…", "software_desc": "…", "url": "…"}
+```
+
+没有可用更新时回 **404** `{"status":"error","message":"未找到可用更新"}`。
+
 ### 在线升级
 
 ```
 POST /api/ota/upgrade
 ```
 
+异步下载固件并安装，**立刻**回 `{"status":"ok","task_id":"…"}`；已经是新版则回
+`{"status":"ok","message":"已是最新版本"}`。固件与暂存都在 `$AKA_HOME/.ota`（不放 `/tmp`，
+那是内存盘）。
+
+### 直接上传固件升级（不联网）
+
+```
+POST /api/ota/update       # multipart/form-data，文件部分就是固件
+```
+
+回 `{"status":"ok","task_id":"…","message":"upload received, installing..."}`；没有文件回
+**400** `{"status":"error","message":"no firmware file"}`。
+
 ### OTA 状态
 
 ```
-GET /api/ota/status
+GET /api/ota/status                              # 没有进行中的任务时 {"status":"idle"}
+GET /api/ota/upgrade/progress?task_id=<id>       # {"progress": 0-100, "status": "downloading|installing|done|error", "message": "…"}
 ```
 
 ---

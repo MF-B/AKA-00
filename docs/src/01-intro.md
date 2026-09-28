@@ -6,30 +6,32 @@ AKA-00 是一个面向教学的低成本AI机器人，通过提供简单的平�
 
 | 能力 | 说明 |
 |------|------|
-| 机械臂控制 | 支持 STS3215、MG996R 等舵机 |
-| 底盘运动 | N20 电机差速控制 |
-| 远程控制 | Web 界面 + HTTP API |
+| 机械臂控制 | ZL-ZP10S 串口舵机（也支持 STS3215），夹爪带闭环判"夹住" |
+| 底盘运动 | TT 马达差速控制，经 ESP32-C3 底盘板闭环，可按距离/角度走精确到位 |
+| 视觉推理 | 板载 NPU 跑 `.cvimodel` 模型；单帧检测接口 + 可编排的 Lua 流程脚本 |
+| 远程控制 | Web 界面 + HTTP API + WebSocket 摇杆 |
 
 ## 技术架构
 
 ```
 AKA-00
-├── tennis_hunter.py     # 机器人主程序
-├── run.py               # Web 服务器
-├── src/
-│   ├── arm_control/     # 机械臂控制（舵机驱动）
-│   ├── base_control/    # 底盘控制（电机驱动）
-│   └── cameras/         # 摄像头模块
-├── app/                 # Flask Web 应用
-├── frontend/            # React 前端
-└── models/              # YOLOv8 模型
+├── cpp/
+│   ├── capp/         # aka-capp 服务：HTTP/WS 服务 + 接口路由
+│   ├── csrc/         # 平台与硬件层：摄像头、板载屏、串口、舵机、电机、推理
+│   └── board/        # 板上部署内容（config.toml、init.sh、demo/）
+├── frontend/         # React 前端源码
+├── static/           # 前端构建产物（打包时收进部署目录）
+└── tests/            # 板测工具与测试脚本
 ```
+
+各目录职责与"想改什么改哪里"见[代码结构](./06-development/structure.md)。
 
 ## 硬件平台
 
-| 组件 | 型号 |
-|------|------|
-| 主控 |  [LicheeRV Nano](https://wiki.sipeed.com/hardware/zh/lichee/RV_Nano/1_intro.html) |
-| 机械臂 | ZL-ZP10S / STS3215 |
-| 电机 | N20 直流减速电机 |
-| 摄像头 | USB 免驱摄像头 |
+| 组件     | 型号                                 |
+|----------|--------------------------------------|
+| 主控芯片 | （算能 CV1812，1 TOPS NPU）          |
+| 机械臂   | ZL-ZP10S / STS3215                   |
+| 电机     | TT 马达 ×2（接 ESP32-C3 底盘板闭环） |
+| 摄像头   | USB 免驱摄像头（UVC / MJPEG）        |
+| 板载屏   | ST7796S 320x480（仅带屏版）          |

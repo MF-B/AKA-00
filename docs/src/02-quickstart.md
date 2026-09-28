@@ -16,45 +16,33 @@
 
 ## 3. 部署（首次/更新）
 
-项目以单文件 `aka-00-server` 分发，拷贝到控制板：
+项目以单文件 `aka-00-server` 分发，拷贝到控制板执行：
 
 ```bash
-# 打包（在开发机上）
-make -C cpp ota                 # 打包（用已有前端产物）
-cd frontend && npm run build    # 需要重建前端时先跑这个
-make -C cpp ota                 # 再打包
+# 打包（在开发机上；改了前端要先 cd frontend && npm run build）
+make -C cpp ota                 # → cpp/dist/aka-00-server
 
-# 拷贝到控制板
-scp cpp/dist/aka-00-server root@<robot>:
+# 拷贝到控制板（-O：板载 sshd 不认新版 SFTP 协议）
+scp -O cpp/dist/aka-00-server root@<robot>:/root/
 
-# 首次部署：一键初始化（解压 + 热点 + 自启）
-ssh root@<robot> 'aka-00-server --init'
-
-# 之后每次开机自动启动，也可手动运行
-ssh root@<robot> 'aka-00-server'
+# 首次部署：解包 + 热点 + 开机自启
+ssh root@<robot> '/root/aka-00-server --init'
 ```
 
 更新部署（**保留** `config.toml`、证书、demo 卡片等现场数据）：
-```bash
-scp cpp/dist/aka-00-server root@<robot>:/tmp/
-ssh root@<robot> 'chmod +x /tmp/aka-00-server && /tmp/aka-00-server --update'
-```
-> 想让本次带的默认配置连 `config.toml` 一起覆盖，用 `AKA_OTA_RESET_CONFIG=1 ...--update`。
-
-## 4. 修改代码常用命令
 
 ```bash
-# SSH 登录控制板
-ssh root@<机器人IP>
-
-# 本地修改代码后，重新打包并部署
-make -C cpp ota && scp cpp/dist/aka-00-server root@<robot>:/usr/local/bin/
-
-# 在控制板上重启服务
-ssh root@<robot> 'aka-00-server --update'
+scp -O cpp/dist/aka-00-server root@<robot>:/root/
+ssh root@<robot> 'setsid /root/aka-00-server --update >/root/ota.log 2>&1 < /dev/null'
 ```
 
-## 5. 使用
+> - **别放 `/tmp`**：板上 `/tmp` 是 53MB 的内存盘，20MB 的固件放那儿会把内存打爆。
+> - 想让本次带的默认配置连 `config.toml` 一起覆盖，用 `AKA_OTA_RESET_CONFIG=1 ... --update`。
+> - `setsid` 是因为 `--update` 结尾是 `exec init.sh`，会把服务挂在当前 ssh 会话上；
+>   也可以升级完直接 `reboot`（开机由 `/etc/init.d/S99webstart` 拉起）。
+
+
+## 4. 使用
 
 启动后通过以下方式控制：
 

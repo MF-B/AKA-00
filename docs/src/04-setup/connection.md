@@ -18,26 +18,34 @@
 将 `aka-00-server` 拷贝到控制板，一条命令完成初始化：
 
 ```shell
-# 1. 拷贝到控制板
-scp cpp/dist/aka-00-server root@<robot>:/usr/local/bin/
+# 1. 拷贝到控制板（-O：板载 sshd 不认新版 SFTP 协议；别放 /tmp，那是内存盘）
+scp -O cpp/dist/aka-00-server root@<robot>:/root/
 
-# 2. 一键初始化（解压 + AP 热点 + DHCP + 开机自启）
-ssh root@<robot> 'aka-00-server --init'
+# 2. 一键初始化（解包 + AP 热点 + DHCP + 开机自启）
+ssh root@<robot> '/root/aka-00-server --init'
 ```
 
 `--init` 自动完成：
-- 解压项目文件到 `$HOME/AKA-00`
-- 配置 AP 热点（SSID: `chenlong-robot-xxxxx`，基于 MAC 地址唯一）
-- 配置 DHCP（192.168.4.100-200）
-- 写入 S98apstart / S99webstart 自启脚本
+- 解包到 `$AKA_HOME`（默认 `/root/AKA-00`）
+- 配置 AP 热点（SSID `chenlong-robot-<数字>`，由 wlan0 的 MAC 推出，开放无密码，
+  channel 6；要加密码就取消 `/etc/hostapd.conf` 里 `wpa=2` 那几行注释）
+- 配置 DHCP（`192.168.4.100`~`192.168.4.200`，网关 `192.168.4.1`）
+- 写入 `S98apstart` / `S99webstart` 自启脚本
 - 立即启动热点
 
-之后每次开机自动运行 `aka-00-server`。如需手动更新：
+之后每次开机由 `/etc/init.d/S99webstart` 拉起 `init.sh`（内部自愈循环，capp 崩了自动重启）。
+
+手动更新：
 
 ```shell
-scp cpp/dist/aka-00-server root@<robot>:/usr/local/bin/
-ssh root@<robot> 'aka-00-server --update'
+scp -O cpp/dist/aka-00-server root@<robot>:/root/
+ssh root@<robot> 'setsid /root/aka-00-server --update >/root/ota.log 2>&1 < /dev/null'
 ```
+
+> `--update` 默认**保留**板上的 `config.toml`、`speed_config.json`、`arm_angles.json`、
+> `cert.pem`、`key.pem` 与 demo 卡片/模型；想让包里带的新配置生效，加
+> `AKA_OTA_RESET_CONFIG=1`。结尾是 `exec init.sh`，会把服务挂在当前 ssh 会话上，
+> 所以要 `setsid`（或者升级完 `reboot`）。
 
 ## HTTPS 证书生成命令
 

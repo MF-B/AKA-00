@@ -16,10 +16,14 @@ sudo mount /dev/loop0p2 /mnt    # 挂载loop设备的p2分区到/mnt目录
 在挂载后，我们可以对镜像文件进行修改。具体步骤如下：
 ```bash
 cd /mnt/root/ # 进入挂载目录
-rm -rf AKA-00 # 删除AKA-00目录
-cp -r /path/to/AKA-00 . # 复制AKA-00目录到挂载目录
-# 注：如果frontend有更新，需要重新生成static目录
+rm -rf AKA-00 # 删除旧版本
+cp -r /path/to/AKA-00 . # 复制新的部署目录（= cpp/dist/AKA-00/）
 ```
+
+> 用 `make -C cpp package` 生成 `cpp/dist/AKA-00/`，它就是板上 `$AKA_HOME`
+> （镜像里即 `/root/AKA-00/`）该有的样子：`cpp/board/` 的实体文件 + 三样构建产物
+> （`aka-capp`、`static/`、`tools/`）。前端有更新时先 `cd frontend && npm run build`，
+> 打包会自动把仓库根的 `static/` 收进去。
 
 # 4. 镜像的卸载
 在修改完成后，我们可以卸载镜像文件。

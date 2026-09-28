@@ -24,21 +24,33 @@
 
 ### Q: 启动失败，提示缺少依赖？
 
-```bash
-pip install -r requirements.txt
-```
+**板上没有"依赖"可缺** —— 设备端是静态二进制，不依赖 Python 或任何库。启动失败看
+`init.sh` 的输出（串口控制台），常见就两种：
+
+- `aka-capp not found or not executable` —— 包没解全或可执行位丢了，重跑一次
+  `./aka-00-server --update`；
+- 端口被占（日志里 `bind failed`）—— 多半起了两个实例，`ps` 看一眼 `init.sh` 与 `aka-capp`。
+
+如果是**开发机上编译**失败，那才是环境问题（缺 riscv64-musl 工具链）：
+见[开发环境与部署](../04-setup/software.md)。
 
 ### Q: 机械臂不响应？
 
-1. 检查串口连接是否正确
-2. 确认舵机供电正常
-3. 检查 `/dev/ttyACM0` 设备是否存在
+1. 确认舵机控制板接在主控 **UART2**（`/dev/ttyS2`，115200）
+2. 确认舵机供电正常 —— 舵机是独立供电，别只靠主控
+3. `ls -l /dev/ttyS2` 看设备在不在，`config.toml` 的 `[arm] port` / `backend` 是否对得上
+4. 直接读一下角度：`curl http://<ip>/api/arm/angles`
 
 ### Q: 电机不转动？
 
-1. 检查 GPIO 连接
-2. 确认 PWM 引脚配置正确
-3. 检查电机供电
+底盘是 **ESP32-C3 底盘板**闭环控制的，主控并不直连电机 PWM，所以按链路查：
+
+1. 底盘板供电、串口接线（主控 UART1 `/dev/ttyS1`，115200）
+2. 看 `GET /api/motor/status` 的 `motor.connected` / `motor.state`：是 `reconnecting`
+   就是串口没通 —— 服务会按退避自动重连，不用重启
+3. 用 `./tools/tt_pid_test /dev/ttyS1 40 3000` 绕过 Web 层直测（先停 capp）
+4. 配置为空也会导致行为不对：`config.toml` 丢了/0 字节时所有配置静默取默认值，
+   接口看着正常但车不动 —— `init.sh` 启动时会对空配置告警，日志里搜 `config.toml`
 
 ### Q: 摄像头无法识别？
 
@@ -52,7 +64,8 @@ pip install -r requirements.txt
 
 ### Q: 如何查看机器人 IP？
 
-访问 `http://<机器人IP>/api/ip`
+`GET /api/system/ip`（热点模式下网关固定 `192.168.4.1`，接路由器后的 IP 也可以看
+`GET /api/wifi/status`）。
 
 ### Q: 如何开启 HTTPS？
 
