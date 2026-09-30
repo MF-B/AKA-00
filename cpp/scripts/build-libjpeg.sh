@@ -18,7 +18,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$HERE/../third_party/jpeg"
 WORK="$HERE/../third_party/build-jpeg"
 
-TOOLCHAIN_PREFIX="${TOOLCHAIN_PREFIX:-/home/junbo_dai/riscv64-linux-musl-x86_64/bin/riscv64-unknown-linux-musl-}"
+# 工具链：校验并归一化显式前缀，未设时自动探测。
+TOOLCHAIN_PREFIX="$(sh "$HERE/find-toolchain.sh")" || exit 1
 CC="${TOOLCHAIN_PREFIX}gcc"
 AR="${TOOLCHAIN_PREFIX}ar"
 

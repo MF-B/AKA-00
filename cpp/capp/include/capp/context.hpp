@@ -4,8 +4,7 @@
 //   - 硬件: MotorPair / Gripper / Camera（csrc）
 //   - 状态采集: StateCollector（csrc 单例）
 //   - 控制服务: 定时停线程 / 夹爪锁
-//   - demo: 卡片 = 动作 × 模型（跑 demo/<动作>.lua，模型由宿主注入 params.model；见 routes.cpp）
-//   - 脚本: Lua 流程宿主（$AKA_HOME/demo/*.lua）
+//   - demo: C++ 追踪状态机，动作默认参数在 demo/<动作>.json，卡片按模型覆盖参数
 //   - ota: 升级任务
 //   - 云端上报: 命令日志
 //
@@ -14,11 +13,12 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <ctime>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <pthread.h>   // script_tid 是 pthread_t：自己 include，别指望 <thread> 间接带进来
+#include <pthread.h>   // demo_tid 是 pthread_t：自己 include，别指望 <thread> 间接带进来
 #include <string>
 #include <thread>
 #include <vector>
@@ -48,28 +48,26 @@ struct AppContext {
 
     // 单帧推理（GET /api/detect）：懒加载的模型 + 一把锁。
     // 同步跑（每请求一次推理），锁把"换模型 + 推理"整段罩住 —— TPU 是单实例、
-    // YoloDetector 非线程安全；脚本并发由 script_running 串行（同一时刻只有一个流程）。
-    // ── Lua 动作脚本（demo/*.lua）── 状态由工作线程写、接口读，都用 script_mu 保护；
-    // script_abort 是给"立即停"用的（原子，免得停止请求要等锁）。
-    std::mutex script_mu;
-    /// 脚本工作线程（pthread 而不是 std::thread：**要显式指定栈大小**）。
-    /// musl 的 std::thread 默认栈只有 128KB（glibc 是 8MB），而脚本线程的调用链是
-    /// Lua VM → 原语 → 取帧 → libjpeg 解码（jpeg_decompress_struct 本身就十几 KB），
-    /// 栈溢出会踩到相邻内存 —— 实测表现为在 jpeg_idct_* 里收到 badaddr≈0x46 的段错误。
-    pthread_t script_tid{};
-    bool script_tid_valid = false;
-    std::atomic<bool> script_abort{false};
-    bool script_running = false;
-    std::string script_state = "idle";   // idle|running|done|failed|aborted
-    std::string script_message;
-    std::string script_name;    // 动作脚本名（demo/<动作>.lua）
-    std::string script_model;   // 这次跑的是哪个模型（params.model；脚本路径之外还要能答"在追什么"）
-    std::string script_card;    // 哪张卡片发起的（直接调 action+model 跑时为空）
-    bool script_repeat = false; // 循环执行（mode=loop）：跑完一轮接着下一轮，直到被停
-    int script_round = 0;       // 已跑到第几轮（once 恒为 1）
-    long long script_calls = 0;                  // 原语调用计数（看脚本有没有在动）
-    std::string script_action;                   // 最近一次动作
-    std::vector<std::pair<std::string, std::string>> script_notes;   // 脚本 note() 发布的字段
+    // YoloDetector 非线程安全；demo_running 保证同一时刻只有一个流程。
+    // ── C++ Demo 状态机 ── 状态由工作线程写、接口读，都用 demo_mu 保护；
+    // demo_abort 是给"立即停"用的（原子，免得停止请求要等锁）。
+    std::mutex demo_mu;
+    /// 工作线程要显式指定栈大小：musl 默认 128KB，取帧/libjpeg 解码需要更大栈。
+    pthread_t demo_tid{};
+    bool demo_tid_valid = false;
+    std::atomic<bool> demo_abort{false};
+    bool demo_running = false;
+    std::string demo_state = "idle";   // idle|running|done|failed|aborted
+    std::string demo_message;
+    std::string demo_name;    // 动作配置名（demo/<动作>.json）
+    std::string demo_model;   // 这次跑的是哪个模型
+    std::string demo_card;    // 哪张卡片发起的（直接调 action+model 跑时为空）
+    bool demo_repeat = false; // 循环执行（mode=loop）：跑完一轮接着下一轮，直到被停
+    int demo_round = 0;       // 已跑到第几轮（once 恒为 1）
+    long long demo_calls = 0;                  // 检测/动作执行计数
+    std::string demo_action;                   // 最近一次动作
+    std::string demo_phase = "idle";           // 状态机阶段
+    std::vector<std::pair<std::string, std::string>> demo_notes;   // 目标框/偏移/丢失时间
 
     std::mutex detect_mu;
     std::string detect_model;                      // 当前已加载的模型名（空 = 没加载）
@@ -90,8 +88,12 @@ struct AppContext {
     std::atomic<bool> timer_cancel{false};
     /// 控制指令代际号（timer_mu 保护）：每条新指令推进；同步等待方据此判断
     /// "自己发起的运动是否已被后续指令取代"（被取代则不再自动停车）
-    int motion_seq = 0;
-    std::mutex arm_mu;   // grab/release 串行
+    int64_t motion_seq = 0;
+    int64_t demo_motion_seq = -1;  // timer_mu 保护；Demo 停止/收尾不能覆盖人工接管的指令
+    std::mutex arm_mu;   // 保护夹爪忙状态与完成通知，不能跨线程交接锁的所有权
+    std::condition_variable arm_done;
+    bool arm_busy = false;
+    std::string arm_error;
 
     // ota 任务: task_id → Json{progress, status, message}
     std::mutex ota_mu;
@@ -142,14 +144,16 @@ csrc::Json reinitialize_motor_pair(AppContext& ctx);
 /// 底盘连接状态对象（backend/enabled/connected/state/attempts/error）
 csrc::Json motor_status_json(AppContext& ctx);
 
-// ── 底盘/机械臂的底层原语（服务层内部用；脚本宿主 capp/script.cpp 也复用）──
+// ── 底盘/机械臂的底层原语（服务层与 demo_runner.cpp 共用）──
 
-/// 取一帧跑一次推理 → 框列表（原图像素坐标、已 NMS）。`/api/detect` 与脚本原语共用。
+/// 取一帧跑一次推理 → 框列表（原图像素坐标、已 NMS）。`/api/detect` 与 Demo 共用。
 bool detect_boxes(AppContext& ctx, const std::string& model_name, const csrc::DecodeOptions& opt,
                   std::vector<csrc::Detection>& out, int& frame_w, std::string& err);
 
 /// 取消挂起的"定时停"线程
 void cancel_pending_stop(AppContext& ctx);
+/// 仅当代际号仍匹配时取消定时停，避免 Demo 误取消人工接管后的定时停车。
+bool cancel_pending_stop_if_owned(AppContext& ctx, int64_t expected_seq);
 /// 推进控制指令代际号（每条新指令都要推；同步等待方据此判断自己是否已被取代）
 int64_t bump_motion_seq(AppContext& ctx);
 /// 读当前代际号
@@ -188,12 +192,12 @@ bool valid_model_name(const std::string& name);
 
 // ── demo 资源（全部在 `$AKA_HOME/demo/` 下，见 cpp/README.md 的部署布局）──
 //
-//   demo/<动作>.lua            **动作脚本**（预定义、与模型无关，模型从 params().model 读）
+//   demo/<动作>.json           动作默认参数（type=track，on_arrival=stop|grab）
 //   demo/models/*.cvimodel     模型库
-//   demo/configs/<卡片名>.json  **卡片定义**：{"action":..,"model":..,+ 四个参数}
+//   demo/configs/<卡片名>.json  **卡片定义**：{"action":..,"model":..,+ 参数覆盖}
 //
-// 一张 demo 卡片 = 动作 × 模型（用户自己在界面上建，名字自由）；跑的时候宿主读卡片拿到
-// 动作和模型，跑 demo/<动作>.lua 并把 params.model 注入成卡片里的模型。
+// 一张 demo 卡片 = 动作 × 模型（用户自己在界面上建，名字自由）；启动时读卡片拿到
+// 动作和模型，以动作 JSON 的默认值和卡片参数运行 C++ 状态机。
 // 注意卡片名**只当文件名用**（可能是中文），别拿它去拼模型路径 —— 这是最容易犯、
 // 报错又最误导的一处（会变成"注册模型失败：…/demo/models/追网球接近.cvimodel"）。
 
@@ -202,11 +206,8 @@ std::string model_dir(AppContext& ctx);
 /// `$AKA_HOME/demo/models/<name>.cvimodel`
 std::string model_path(AppContext& ctx, const std::string& name);
 
-/// `$AKA_HOME/demo/<动作>.lua`（参数是**动作名**，不是卡片名、更不是模型名）
-std::string action_script_path(AppContext& ctx, const std::string& name);
-/// 这个动作脚本在不在（列表用它标 script 字段，跑之前也用它先挡一道）
-bool action_script_exists(AppContext& ctx, const std::string& name);
-
+/// `$AKA_HOME/demo/<动作>.json`（参数是动作名，不是卡片名、更不是模型名）
+std::string action_config_path(AppContext& ctx, const std::string& name);
 /// 卡片名是否合法：只有文件系统层面的限制（允许中文），见实现里的说明
 bool valid_card_name(const std::string& name);
 
@@ -216,37 +217,34 @@ bool valid_card_name(const std::string& name);
 csrc::Json save_model_upload(AppContext& ctx, const std::string& name, const std::string& content);
 
 
-// ── Lua 流程脚本（$AKA_HOME/demo/*.lua，实现在 capp/script.cpp）──
-//
-// 把"看→对准→靠近→抓"这类**要反复调参的流程**从 C++ 搬到脚本里：改一行存盘重跑，
-// 不用交叉编译 + 部署 + 重启。脚本只拿得到有上限的原语；限速/被抢占的接管/
-// 底盘掉线这些**安全兜底全在宿主**（见 script.cpp 的注释与文档）。
+// ── C++ 流程执行器（实现在 demo_runner.cpp；纯状态核心见 demo_machine.hpp）──
 
-/// 跑一个动作脚本（异步；同一时刻只允许一个）。params 会以 Lua table 的形式给脚本读。
-/// 脚本从 `$AKA_HOME/demo/<name>.lua` 读（name 是**动作名**）；名字只允许 [A-Za-z0-9_.-]。
+/// 运行一个动作（异步；同一时刻只允许一个）。每次启动重新读取 demo/<name>.json。
 /// 执行方式看 params.mode：`once`（默认，跑一遍就结束）/ `loop`（跑完接着跑，直到被停）。
-/// **没有总时长上限** —— 停不停由 stop / 人的指令接管 / 服务退出决定。
-csrc::Json script_run(AppContext& ctx, const std::string& name, const csrc::Json& params);
-/// 停止当前脚本：置中止标志并立刻刹车（不等脚本配合）。
-csrc::Json script_stop(AppContext& ctx);
+/// once 最多 5 分钟，loop 没有总时长上限；限速/停止/接管检查由执行器强制。
+csrc::Json demo_run(AppContext& ctx, const std::string& name, const csrc::Json& params);
+/// 停止当前 Demo，立刻刹车；若已被人工指令接管，则不覆盖人工动作。
+csrc::Json demo_stop(AppContext& ctx);
 /// 当前状态：state / script（动作名）/ mode / round / model / card / message /
-/// calls / action / notes
-csrc::Json script_status(AppContext& ctx);
+/// calls / action / phase / notes。script 字段保留为动作 ID，兼容现有客户端。
+csrc::Json demo_status(AppContext& ctx);
+/// 服务关闭时等工作线程退出，必须在释放摄像头和底盘之前调用。
+void join_demo_worker(AppContext& ctx);
 
 /// 取当前摄像头帧跑一次推理。
 /// 成功：{"ok":true,"count":N,"boxes":[{"x1","y1","x2","y2"}...]}（原图像素坐标）
 /// 失败：{"ok":false,"error":"..."}（HTTP 码由路由决定）
 /// 从 conf / iou 构造解码参数：0 表示"没给"→ 用默认（0.25 / 0.45），
-/// 给了就夹到 0.01~0.99。/api/detect 的 ?conf=&iou= 与脚本的 detect(model, {conf=,iou=})
+/// 给了就夹到 0.01~0.99。/api/detect 的 ?conf=&iou= 与 Demo 检测参数
 /// 都走这里，免得两处各写一套边界。
 csrc::DecodeOptions decode_options(double conf, double iou);
 
 /// 等机械臂动作（grab/release）做完 —— 它们是异步跑的，接口要等它才能报"完成"。
 void wait_arm_done(AppContext& ctx);
 
-/// 等脚本跑完（状态离开 running）。true = 已结束；false = 超时仍在跑。
+/// 等 Demo 跑完（状态离开 running）。true = 已结束；false = 超时仍在跑。
 /// 给"跑完再返回"的接口用（每个连接一个线程，阻塞不会卡住别的请求）。
-bool wait_script_done(AppContext& ctx, double timeout_s);
+bool wait_demo_done(AppContext& ctx, double timeout_s);
 
 /// 单帧推理（/api/detect 用）。opt 不给就用默认阈值（conf 0.25 / iou 0.45）。
 csrc::Json detect_once(AppContext& ctx, const std::string& model_name,

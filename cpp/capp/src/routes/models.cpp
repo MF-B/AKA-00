@@ -163,7 +163,7 @@ void register_models_routes(Router& router, AppContext& ctx) {
     // 与上面 `/api/models/upload` 的区别：那个是"平台/curl 推模型"（名字走 query，body 就是
     // 文件裸内容，响应 {ok,name,path,size}）；这个是**浏览器表单直传**（multipart 两个字段
     // file+name，响应 {status,name,size}）。
-    // **不再给模型生成脚本**：动作脚本是预定义、与模型无关的，传完模型后在 Demo 页建一张卡
+    // 动作配置与模型无关；传完模型后在 Demo 页建一张卡。
     // （动作 × 这个模型），或直接 POST /api/demo/init {"action":"grab","model":"<名字>"}。
     //
     // CORS 与 OPTIONS 预检不在这里处理：http_server 在路由之前就统一应答了（所有响应也
@@ -220,7 +220,7 @@ void register_models_routes(Router& router, AppContext& ctx) {
         j["size"] = Json((int64_t)r.geti("size", 0));
         j["path"] = r.gets("path");
         // script / script_created：训练平台那份契约里的字段，**保留不删**（平台在读），
-        // 但语义变了 —— 动作脚本是预定义的、与模型无关，上传模型不再生成脚本。
+        // 上传模型不生成动作；执行器使用预定义的 JSON 动作配置。
         // 模型传上来就能用：建一张卡片（动作 × 这个模型）或直接
         // POST /api/demo/init {"action":"grab","model":"<名字>"}。
         j["script"] = "";

@@ -41,27 +41,20 @@ void register_ws_routes(Router& router, AppContext& ctx);
 // 卡片由**用户在界面上新建**（选动作 + 选模型 + 填参数），接口是 POST /api/demo/config。
 // 卡片名**只当文件名用**（可以是中文「追网球接近」），动作和模型写在文件里 ——
 // 所以不需要"从名字拆出模型和动作"（那种拆法遇到模型名自带 `-` 就歧义了）。
-// 跑卡片时：读配置 → 跑 demo/<动作>.lua → 把 params.model 注入成**配置里的模型**。
+// 跑卡片时：读配置 → 合并 demo/<动作>.json 默认值 → 用**配置里的模型**运行状态机。
 // （注意不是卡片名！搞错的话会变成"注册模型失败：…/demo/models/追网球接近.cvimodel"）
 
-constexpr int kDemoTargetSizeDefault = 300;
-constexpr int kDemoSpeedDefault = 25;        // 直线速度（%）
-constexpr int kDemoTurnSpeedDefault = 25;    // 转弯速度（%）—— 和直线分开：转弯要的占空比不同
-// 执行方式（卡片上一个字段）：跑一遍就结束 / 跑完接着跑直到被停
-// （目前没人读这个常量，比大小写都在各自的地方硬编码 —— 留着当文档，别删）
-constexpr const char* kDemoModeDefault = "once";
 // "等它跑完再返回"（默认就等）最多等多久 —— 超时就回 timeout + 当前状态，不无限挂着。
-// 这个数要**比脚本自己的"执行一次"时限（script.cpp 的 kScriptMaxOnceSeconds）略大**：
-// 那样到点的正常路径是脚本先收工、请求拿到真实原因（"到最大执行时间"），而不是请求先不等了、
-// 留一辆还在动的车。多出来的 10 秒就是给这条留的余量。
+// 比 demo_runner.cpp 的 once 时限（300 秒）多留 10 秒，正常路径由执行器先收工。
+// 底层设备调用阻塞时，请求最多等 310 秒，执行器在调用返回后继续检查停止/超时。
 // 循环执行不受它影响：loop 默认就不等（等了也不会自己结束）。
 constexpr double kDemoWaitMaxSeconds = 310.0;
 
 struct DemoCard {
     std::string name;     // 卡片名（= 文件名，可能中文）
-    std::string action;   // 动作 = 脚本名（demo/<action>.lua）
+    std::string action;   // 动作配置名（demo/<action>.json）
     std::string model;    // 模型（demo/models/<model>.cvimodel）
-    csrc::Json params;    // 四个运行参数（缺的用默认值兜底）
+    csrc::Json params;    // 参数覆盖；缺的用动作默认值（mode 缺省 once）
 };
 
 std::string demo_config_path(AppContext& ctx, const std::string& name);
@@ -76,7 +69,7 @@ std::vector<DemoCard> list_demo_cards(AppContext& ctx);
 bool save_demo_card(AppContext& ctx, const std::string& name, const std::string& action,
                     const std::string& model, const csrc::Json& params);
 
-/// 可用的动作脚本（demo/*.lua）；name 来自脚本第一行的 `-- name: 显示名`
+/// 可用的动作配置（demo/*.json）；name 来自 JSON 的 name 字段
 struct ActionInfo {
     std::string id;
     std::string name;

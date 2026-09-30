@@ -324,8 +324,7 @@ curl "http://<ip>/api/detect?model=block"
   库里查，不存在就报错，没有隐式回退。
 - 接口是**同步**的：每个请求现场取帧 → 推理 → 返回。模型首次请求时加载，之后常驻；
   只有 `?model=` 变了才重新加载。
-- **TPU 是单实例**：`/api/detect` 与流程脚本共用同一个检测器（各自串行），
-  但别在脚本跑的时候另起一个吃 TPU 的进程。
+- TPU 是单实例，`/api/detect` 与 Demo 共用检测器并串行执行；另起 TPU 进程会造成资源竞争。
 - 换自己的模型时对一下规格。本仓库 `demo/models/tennis.cvimodel` 板上实测：输入
   `640x480`、`YUV420_PLANAR`、8 位量化；输出 `[1,5,6300,1]` FP32、单类别
   （`6300 = 80×60 + 40×30 + 20×15`，即三个 stride 的网格点数之和）。
@@ -417,7 +416,7 @@ POST /api/models/delete
 训练平台（`yolotrain.chenlongrobot.com`）训练完，浏览器把模型**直传小车**（同一局域网），
 车端不做任何运行切换，只落盘 —— 后续验证人工做。与上面那个接口的区别：名字在表单里
 （走 query 的旧接口是给 curl / 云端推模型用的），响应字段是 `status/name/size`。
-模型落盘即可用：动作脚本是预定义的、与模型无关，**不再给每个模型生成脚本** ——
+模型落盘即可用：JSON 动作配置与模型独立，上传后选择动作和模型即可运行 ——
 传完要么在 Demo 页新建一张卡片（动作 × 这个模型），要么直接
 `POST /api/demo/init {"action":"grab","model":"orange"}`。
 
@@ -453,244 +452,175 @@ curl -F "file=@model.cvimodel" -F "name=orange" "http://<ip>/api/model/upload"
 落盘与副作用：
 
 - 模型 → `demo/models/<name>.cvimodel`（**同名覆盖**，原子换入，坏包不会顶掉正在用的）
-- 脚本：**不再生成**。动作脚本是仓库里预定义的 `demo/grab.lua` / `demo/approach.lua`，
-  与模型无关；传完模型后要么在 Demo 页新建一张卡片（动作 × 这个模型），要么直接
+- 动作使用仓库预定义的 `demo/grab.json` / `demo/approach.json`；传完模型后可在
+  Demo 页新建一张卡片（动作 × 这个模型），或直接
   `POST /api/demo/init {"action":"grab","model":"<名字>"}` 跑一下。
 - CORS 与 `OPTIONS` 预检由服务器统一处理（所有响应带 `Access-Control-Allow-Origin: *`，
   预检回 200），浏览器跨域直传不需要额外配置。
 
-## Demo（本地演示）
+## Demo（C++ 状态机 + JSON）
 
-板上的 **一张 demo 卡片 = 动作 × 模型**：
+一张 Demo 卡片 = 动作配置 × 模型 + 参数覆盖：
 
-- **动作**是预定义的通用脚本（`demo/grab.lua` 追到就夹、`demo/approach.lua` 只接近不夹，
-  你也可以再放一份 `demo/<动作>.lua` 加新动作）—— 与模型无关；
-- **模型**是 `demo/models/` 里的一颗 `.cvimodel`；
-- 卡片由**用户在 Demo 页新建**（选动作、选模型、起个名字、填参数），名字随便起（中文也行），
-  配置存在 `demo/configs/<卡片名>.json`。
+- 动作配置是 `demo/<动作>.json`：`approach` 到位停车，`grab` 到位抓取。
+- 模型是 `demo/models/<模型>.cvimodel`。
+- 卡片是 `demo/configs/<卡片名>.json`，可在 Demo 页或配置接口创建，名字允许中文。
+
+C++ 执行追踪流程，JSON 设置参数，构建和运行均不需要 Lua。动作默认值在每次启动时重读；
+运行中修改文件，要在下一次启动才生效。参数优先级是：内置默认值 → 动作默认值 →
+卡片覆盖 → 本次请求显式覆盖。高级字段与流程判断见 [视觉与 Demo 使用说明](vision-demo.md)。
+
+### 列表
 
 ```
-GET  /api/demo/list                     → {"demos":[...], "actions":[...], "models":[...]}
-POST /api/demo/init {"name":"追网球接近"}              → 跑存下来的那张卡片
-POST /api/demo/init {"action":"grab","model":"tennis"} → 直接跑，不用建卡
-POST /api/demo/init {"name":"追网球接近"}              → **默认等它跑完再返回**
-POST /api/demo/stop                     → 停
+GET /api/demo/list
 ```
-
-`GET /api/demo/list` 一次给全三份数据（列表 + 可用的动作 + 可用的模型，新建表单直接用）：
 
 ```json
 {
   "demos": [
-    {"name":"追网球接近", "action":"approach", "model":"tennis",
-     "ready":true, "script":"approach", "path":"/root/AKA-00/demo/models/tennis.cvimodel",
-     "kind":"card", "error":""}
+    {"name":"追网球接近","action":"approach","model":"tennis",
+     "ready":true,"script":"approach","path":"/root/AKA-00/demo/models/tennis.cvimodel",
+     "kind":"card","error":""}
   ],
-  "actions": [{"id":"approach","name":"接近瞄准"}, {"id":"grab","name":"追到就夹"}],
-  "models": ["block", "tennis"]
+  "actions": [{"id":"approach","name":"接近瞄准"},{"id":"grab","name":"追到就夹"}],
+  "models": ["orange","tennis"]
 }
 ```
 
-> 动作的显示名来自脚本第一行的约定注释 `-- name: 接近瞄准`；没写就用文件名。
-> `ready=false` 表示动作脚本或模型文件缺了（卡片照样列出来，点开始会明确报错）。
+动作列表只包含解析、校验通过的 JSON，显示名来自 `name` 字段，缺省使用文件名。
+卡片仍会列出配置无效或资源缺失的条目，用 `ready:false` 和 `error` 说明原因。
 
-### 卡片配置（一张卡片一份）
+### 卡片配置
 
 ```
 GET  /api/demo/config?name=追网球接近
-     → {"name":"追网球接近","action":"approach","model":"tennis",
-        "target_size":300,"speed":50,"turn_speed":25,"mode":"once"}
-POST /api/demo/config  {"name":"追网球接近","action":"approach","model":"tennis",
-                        "target_size":300,"speed":30,"turn_speed":25,"mode":"loop"}
-POST /api/demo/delete  {"name":"追网球接近"}
+POST /api/demo/config
+POST /api/demo/delete {"name":"追网球接近"}
 ```
 
-| 字段 | 含义 |
-|------|------|
-| action | 动作脚本名（`demo/<action>.lua`），必填 |
-| model | 模型名（`demo/models/<model>.cvimodel`），必填 |
-| target_size | 目标框宽（原图像素）——框宽达到它就认为到位 |
-| speed | 直线速度百分比（宿主还会再 clamp 到 ≤70） |
-| turn_speed | 转弯速度百分比（同样 clamp 到 ≤70）—— 和直线分开：转弯要的占空比不同 |
-| mode | 执行方式：`once`（默认，跑一遍就结束，**最多 5 分钟**）/ `loop`（跑完接着跑，**直到你按停止**，没有时长上限） |
+新建或修改的请求：
 
-> **POST 就是"新建或覆盖一张卡片"**：界面上的"新建"与"保存"走的是同一个接口
-> （改参数时要把 `action`/`model` 一起回传，否则会当成新建）。改名 = 用新名字 POST 一份、
-> 把旧的 `POST /api/demo/delete` 掉。
->
-> 这些值就是脚本里 `params()` 读到的东西（另外宿主还会注入 `model`，见下节）。
->
-> 卡片是**用户在板上建的现场数据**：OTA 升级时按"**板上优先**"保留 —— 同名卡片升级不会
-> 覆盖你在界面上调好的参数（包里带的那些只在板上没有同名时才落地，当出厂预设）。
-> `demo/*.lua`（动作脚本）相反是仓库里的代码，升级按包里结算 —— 想调参就改卡片配置，
-> **别改动作脚本**，否则升级会丢。
-
-### 临时组装一个 demo 直接跑（不建卡）
-
-**"模型 + 动作 + 那几个值"凑齐就是一次完整的 demo 请求**，不用先建卡。刚传上来一个新
-模型想立刻试、或者要把一条命令发给别人让他在板上按自己的参数跑一遍，都用这条：
-
-```bash
-curl -X POST http://<ip>/api/demo/init \
-     -H 'Content-Type: application/json' \
-     -d '{"action":"approach","model":"apple","target_size":320,"speed":30,"turn_speed":20,"mode":"once"}'
-```
-
-| 字段 | 含义 |
-|------|------|
-| action | 动作脚本名（`demo/<action>.lua`）—— 做什么 |
-| model | 模型名（`demo/models/<model>.cvimodel`）—— 认什么 |
-| target_size / speed / turn_speed | 与卡片里同名，缺省 300 / 25 / 25 |
-| mode | `once`（默认，跑一遍）/ `loop`（跑完接着跑，直到 `POST /api/demo/stop`） |
-
-效果与建一张卡再跑一样（宿主会把 `model=apple` 注入给动作脚本）；区别是不落盘、
-不会在 Demo 页留下卡片。想让它出现在页面上反复用，再按上面的卡片配置建成卡片。
-
-### 跑完再返回（**默认行为**）
-
-`POST /api/demo/init` / `/api/demo/run` **默认等这次跑完才返回**，直接给完成标志：
-
-```bash
-curl -X POST -H 'Content-Type: application/json' \
-  -d '{"name":"追网球接近"}' http://<ip>/api/demo/init
-# → {"completed": true}
-# → {"completed": false, "error": "目标丢失（1520ms 没看到目标）"}
-```
-
-`completed: false` 时 `error` 说明原因（脚本 `fail` / 丢目标 / 被人的指令接管 /
-`timeout: 到最大执行时间（5 分钟）`）。过程中发生了什么看 `/api/demo/status` 的
-`state` / `message` / `round` / `notes`。
-
-> **执行一次（`mode: "once"`）有 5 分钟上限**，到点宿主自己收工（停电机、状态落 `aborted`、
-> `error` 写"到最大执行时间"）—— 所以 `wait` 的请求最多 5 分钟必定有结论。
-> 循环执行不受它管：`loop` 本来就不该自己结束，等不到就去 `POST /api/demo/stop`。
->
-> 唯一的例外是脚本卡在**不调用任何原语的死循环**里（宿主只在原语入口查打断）：
-> 那时请求会等到 310 秒回一条 `timeout: 等了 310 秒还没跑完…`，脚本仍在跑，
-> 但 `POST /api/demo/stop` 会在它下一次调原语时生效。
-
-**想立刻返回**（不等，自己轮询状态 —— 界面就是这么用的）就显式传 `"wait": false`，
-此时响应是 `{"status":"started", "name":…, "script":…}`：
-
-```bash
-curl -X POST -H 'Content-Type: application/json' \
-  -d '{"name":"追网球接近","wait":false}' http://<ip>/api/demo/init
-curl http://<ip>/api/demo/status          # 边跑边看
-```
-
-> **`mode=loop`（循环执行）例外**：它不会自己结束，所以默认**不等**（立刻回 `started`，
-> 否则等于把连接挂死）；对它显式传 `"wait": true` 会被 **400** 拒掉
-> （`loop 模式不会自己结束，wait 没有意义（要停就 POST /api/demo/stop）`）。要停就
-> `POST /api/demo/stop`。
-
-| 失败 | HTTP | 响应 |
-|------|------|------|
-| 卡片不存在 / 配置读不了 | 400 | `没有这张卡片（或配置读不了）：demo/configs/xxx.json` |
-| 动作脚本不存在 | 400 | `动作脚本不存在：demo/approach.lua` |
-| 模型不存在 | 400 | `模型不存在：demo/models/apple.cvimodel` |
-| 名字非法（卡片名/动作名/模型名） | 400 | 各自说明原因（卡片名不能含 `/` `\\` 与控制字符） |
-
----
-
-## 流程脚本（Lua）
-
-"看 → 对准 → 靠近 → 抓"这类**流程**天生要反复调参。写在 C++ 里，改一个数就得交叉编译 +
-部署 + 重启（一轮几分钟）；写在脚本里就是改一行存盘重跑。所以 capp 内置了一个 Lua 宿主：
-**原语在 C++（快、稳），流程在 `$AKA_HOME/demo/*.lua`（好改）**。
-
-```
-POST /api/demo/run       {"script":"grab",
-                          "params":{"model":"tennis","target_size":300,"speed":20}}
-     → {"ok":true,"state":"running","script":"grab","mode":"once"}
-GET  /api/demo/status
-     → {"state":"running","script":"grab","model":"tennis","card":"追网球","message":"","calls":42,"action":"forward",
-        "notes":{"box_w":"212","offset":"-33"}}
-POST /api/demo/stop
-     → {"ok":true,"state":"aborted"}（立刻刹车，不等脚本配合）
+```json
+{"name":"追网球接近","action":"approach","model":"tennis",
+ "target_size":300,"speed":20,"turn_speed":18,"grab_offset":65,
+ "forward_pulse_ms":700,"mode":"once"}
 ```
 
 | 字段 | 说明 |
-|------|------|
-| script | **动作名**，读 `$AKA_HOME/demo/<动作>.lua`（`grab` / `approach` …）。只允许字母数字与 `_ - .` |
-| params | 传给脚本的参数（脚本用 `params()` 读），任意扁平/嵌套表 |
-| params.mode | `once`（默认）跑一遍就结束，**最多 5 分钟**（到点宿主收工）/ `loop` 跑完接着跑直到被停，没有时长上限 |
+|---|---|
+| name | 卡片名，用作配置文件名 |
+| action / model | 必填；动作配置 ID / 模型 ID |
+| target_size | 到位时目标框宽，原图像素；还须对准夹爪 |
+| speed / turn_speed | 前后移动 / 转向速度，整数百分比；有效值 1～100，执行时最高 70 |
+| mode | 卡片或请求设置：`once`（默认，一轮，最多 5 分钟）/ `loop`（持续多轮） |
+| 其他参数 | 可设置夹爪偏移、转向/后退脉冲、丢失等待和检测阈值等 |
 
-| state | 含义 |
-|-------|------|
-| `idle` | 没在跑 |
-| `running` | 正在跑 |
-| `done` | 脚本正常结束（`message` 是脚本的返回值） |
-| `failed` | 失败：脚本 `fail()`、推理/相机出错、脚本语法错、底盘掉线 |
-| `aborted` | 被停止：`/api/demo/stop`、人的运动指令接管、服务退出 |
+GET 返回合并后的全部有效参数，POST 成功返回 `ok:true` 和有效参数。
+同名、同动作、同模型更新会保留未提交的已有覆盖值，网页基础调参不会清掉高级参数。
+删除只删卡片，动作和模型文件保留。
 
-### 脚本能用的原语（全部只有这些）
+OTA 升级时，同名卡片使用板上已有版本；`demo/*.json` 动作默认配置按新包替换，
+包括板上自行新增的动作配置。持久调参应放在卡片中，新增动作配置应加入仓库后打包。
 
-| 原语 | 说明 |
-|------|------|
-| `detect(model, opts?)` | 取一帧跑一次推理；`opts` 可选 `{conf=, iou=}`（默认 0.25 / 0.45，同 `/api/detect`） → `{frame_w=640, boxes={{x1,y1,x2,y2,w,h,cx,cy,area},...}}`；硬失败返回 `nil, err`（"这一拍还没出帧"返回空列表，不是错误） |
-| `forward(s)` `back(s)` `turn_left(s)` `turn_right(s)` `drive(l,r)` | 驱动；`s`/`l,r` 是百分比，**宿主一律 clamp 到 ±70** |
-| `standby()` `brake()` | 速度归零 / 刹车 |
-| `sleep_ms(ms)` | 等待（切段睡，随时可被打断） |
-| `grab()` `release()` | 夹爪（ZP10S 下是"伸下去→夹→抬起"约 3.5s 的整段序列） |
-| `elapsed_ms()` | 本脚本已跑的毫秒数 |
-| `motor_connected()` | 底盘是否真在线（掉线时驱动是空操作，脚本可据此提前收手） |
-| `abort_requested()` | 是否收到 stop（脚本可选择优雅收尾） |
-| `note(k, v)` | 往 `/api/demo/status` 的 `notes` 里发布一个可观测字段（调参用） |
-| `log(fmt, ...)` | 写日志（`print` 也是它） |
-| `fail(msg)` | 脚本主动判定失败 |
-| `params()` | 启动时传进来的参数表 |
+### 启动
 
-数学/字符串/table 标准库可用；**没有** io / os / package / coroutine / debug，也**没有 pcall**
-（见下）。
+```jsonc
+// 跑已保存卡片；显式参数只覆盖本次运行
+{"name":"追网球接近","grab_offset":70,"wait":false}
 
-### 安全边界（宿主强制，脚本绕不过去）
-
-这是会真开电机的功能，所以下面这些都不在脚本手里：
-
-| 约束 | 由谁强制 |
-|------|---------|
-| 速度上限 ±70% | 宿主 clamp 每个驱动原语的参数 |
-| 执行方式 | `mode`：`once` 跑一遍，**最多 5 分钟**（到点宿主收工）；`loop` 循环跑，没有总时长上限 —— 停不停由你按停止决定 |
-| 被人的指令取代 | 脚本一驱动，宿主就记下指令代际号；摇杆/`/api/control` 一进来代际号就变，脚本立刻被中断并交出控制权 |
-| stop / 服务退出 / 底盘掉线 | 同上，立刻中断 |
-| 内存 | Lua VM 用带预算的分配器（4MB），脚本狂建 table 也吃不光板子内存 |
-| 脚本吞掉中断 | **不给 pcall/xpcall** —— 脚本没法把宿主的打断 catch 住 |
-| 退出时电机 | 宿主兜底刹车（脚本自己忘了停也一样） |
-
-### 示例：`demo/grab.lua`（追到目标并抓起来）
-
-```bash
-curl -X POST http://<ip>/api/camera/open
-curl "http://<ip>/api/detect?model=tennis"      # 先看框多大，据此定 target_size
-curl -X POST -H 'Content-Type: application/json' \
-  -d '{"script":"grab","params":{"model":"tennis","target_size":300,"speed":20,"mode":"once"}}' \
-  http://<ip>/api/demo/run
-curl http://<ip>/api/demo/status                # 边跑边看 action/notes
-curl -X POST http://<ip>/api/demo/stop          # 随时打断
+// 不建卡，直接指定动作和模型
+{"action":"grab","model":"tennis","target_size":280,"speed":20,"wait":false}
 ```
 
-判据（"框宽 = 距离"这一条轴，参数与判据照搬隔壁仓库 aka0 那个预编译 demo，实机调过参）：
-取面积最大的框当目标，然后五选一 ——
+两种请求都发到 `POST /api/demo/init`。一次只允许一个 Demo；
+已在运行时返回 HTTP 409 和 `status:"already_running"`。
 
-| 情况 | 动作 |
-|------|------|
-| 框宽 > 目标 × 1.5（**凑太近**） | 后退一小段：脉冲 = 2.0ms/px × 超出量，夹在 300~700ms |
-| 框宽 ≥ 目标 且 与夹爪位差 ≤ 25px | **到位**：停稳 → 闭合夹爪（`approach.lua` 则只停不夹） |
-| 偏离画面中心 > 80px | 大脉冲转向：脉冲 = 0.5ms/px × 偏离，夹在 300~400ms |
-| 框宽 ≥ 目标 但没对准夹爪位 | 精调小脉冲转向（同上，上限 500ms，别转过头） |
-| 框宽 < 目标 | 前进 600ms |
+`once` 默认等流程结束再响应：
 
-丢目标 1.5s 没找回就收工。三处脉冲的上下限都不是拍的：下限必须大于电机启动时间
-（板上实测这块底盘 ~250ms 才转得起来），上限是"别转过头/退过头"（车尾没有眼睛）。
+```jsonc
+{"completed":true}
+{"completed":false,"error":"failed: 推理失败：camera not available"}
+{"completed":false,"error":"timeout: 到最大执行时间（5 分钟）"}
+```
 
-与那套 demo 的四处**有意差异**：① 用框宽像素判定（本项目口径）而不是框面积占比；
-② 不做"抓前左转 3 次"的爪子偏置补偿（实测夹空再加）；③ 丢目标即收工，不做没有超时的
-原地找球；④ **凑太近会先退一小段**（原来没有这一支，车几乎贴上去、夹爪反而够不着）。
+`completed:true` 表示流程正常结束，包含“目标丢失”，并不保证到位或夹到实物；
+结束原因应读取 `GET /api/demo/status` 的 `message`。
+夹爪没有位置反馈，只能确认抓取序列已结束。
 
-> 夹爪（ZP10S）**没有位置反馈**，"夹到没有"无法确认 —— 脚本只能报告"抓取序列已执行完"。
-> 另外 **TPU 是单实例**：跑动作脚本时别再并发调用 `/api/detect`（宿主内部串行，但会互相拖慢）。
+`wait:false` 立刻返回：
 
----
+```json
+{"status":"started","name":"追网球接近","script":"approach","action":"approach",
+ "model":"tennis","pid":682,"pgid":682,"completed":false}
+```
+
+`wait` 只决定 HTTP 请求是否等待。`loop` 默认立刻返回，显式 `wait:true` 返回 HTTP 400。
+请求最多等 310 秒；执行器每个 tick 和推理返回后检查 5 分钟时限。若底层设备调用阻塞，
+请求可能先返回等待超时，工作线程要等调用返回才能退出。
+
+### 直接运行动作
+
+```
+POST /api/demo/run
+```
+
+```json
+{"action":"grab","params":{"model":"tennis","target_size":300,"speed":20,"mode":"once"},"wait":false}
+```
+
+旧 `script` 字段仍可代替 `action`。动作配置和已知参数在启动前校验，
+`params.model` 必须是合法模型名；模型文件由推理时加载。
+等待语义与 `init` 一致，立刻返回时使用兼容的响应：
+
+```json
+{"ok":true,"state":"running","script":"grab","mode":"once","completed":false}
+```
+
+### 状态和停止
+
+```
+GET  /api/demo/status
+GET  /api/demo/name
+POST /api/demo/stop
+```
+
+状态示例：
+
+```json
+{"state":"running","script":"approach","model":"tennis","card":"追网球接近",
+ "mode":"once","round":1,"calls":42,"action":"forward","phase":"forward","message":"启动",
+ "notes":{"box_w":"212","offset":"-33"}}
+```
+
+| 字段 | 说明 |
+|---|---|
+| state | `idle` / `running` / `done` / `failed` / `aborted` |
+| script | 动作 ID；为兼容现有客户端保留字段名 |
+| model / card | 模型 ID / 发起运行的卡片名，直接运行时卡片为空 |
+| mode / round | 执行方式 / 当前轮次 |
+| message | 结束原因；丢失目标也是正常结束 |
+| phase | `detect`、`forward`、`back`、`turn_left`、`turn_right`、`gap`、`arrived`、`grabbing`，结束后与 state 一致 |
+| calls / action | 检测和动作执行计数 / 最近一次命令 |
+| notes | 字符串观测值：`box_w`、`offset` 或 `lost_ms` |
+
+`name` 接口返回 `{name,action,model}`。`stop` 返回
+`{"status":"stopped","name":"追网球接近","action":"approach"}`，
+没有运行中的 Demo 时返回 `status:"already_stopped"`。
+
+停止接口先刹停仍由 Demo 控制的底盘，再通知工作线程退出；人工接管后不会覆盖人工动作。
+速度最高 70%，运动等待期间每 80ms 维持速度指令。推理失败、相机不可用、夹爪忙和底盘掉线
+使状态变为 `failed`；停止、服务退出、人工接管和一次执行超时使状态变为 `aborted`。
+`loop` 的正常轮次结束后继续，发生失败或中断时退出。
+
+| 启动失败 | HTTP | 说明 |
+|---|---|---|
+| 卡片不存在或配置读不了 | 400 | `没有这张卡片（或配置读不了）：demo/configs/xxx.json` |
+| 动作配置不存在或无效 | 400 | 如 `动作配置打不开：demo/approach.json` |
+| 名字或参数非法 | 400 | 错误中说明字段和范围 |
+| init 指定的模型文件不存在 | 400 | `模型不存在：demo/models/apple.cvimodel` |
+| 已有 Demo 在运行 | 409 | 先停止，等当前运行结束后再启动 |
+| loop 要求 wait:true | 400 | 循环执行不能同步等待 |
 
 ## WiFi
 

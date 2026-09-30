@@ -29,11 +29,16 @@ cpp/
 ├── capp/                     ← app/ 的 C++ 移植（独立 HTTP+WS 服务）
 │   ├── include/capp/
 │   │   ├── context.hpp       应用共享状态（服务单例 + demo/ota 状态）
+│   │   ├── demo_machine.hpp  追踪状态机（时间与观测输入 → 动作命令）
+│   │   ├── demo_config.hpp   JSON 参数加载与校验
 │   │   ├── http_server.hpp   极简 HTTP 服务器（路由/CORS/静态文件/流式响应）
 │   │   ├── websocket.hpp     RFC 6455 WebSocket（/ws/control 二进制协议）
 │   │   └── routes.hpp
 │   ├── src/
 │   │   ├── main.cpp          入口（初始化硬件 → 启动 HTTP）
+│   │   ├── demo_machine.cpp  不含设备 I/O、线程或动态分配的状态核心
+│   │   ├── demo_config.cpp   动作默认参数 + 卡片/请求覆盖
+│   │   ├── demo_runner.cpp   平台执行器：推理、驱动、计时、停止与人工接管
 │   │   ├── routes.cpp        路由注册入口（按域调用 routes/ 下各文件）
 │   │   ├── routes/           一域一文件（对照 app/routes/*.py）：motor/arm/camera/
 │   │   │                     models/demo/display/ota/system/wifi/config/ws
@@ -46,8 +51,9 @@ cpp/
 ├── board/                    ← 板上目录的实体文件（打包时原样收进 dist/AKA-00/，见下）
 │   ├── config.toml  init.sh  stop.sh  init_ap_web.sh  S97akaap  https_init.sh
 │   ├── arm_angles*.json  speed_config.json  VERSION  start_img.jpg
-│   └── demo/                 动作脚本（grab.lua / approach.lua）+ 模型（models/）+ 卡片（configs/）
-├── scripts/                  build-libjpeg.sh / build-mbedtls.sh / build-lua.sh / build-ota.sh
+│   └── demo/                 动作配置（grab.json / approach.json）+ 模型（models/）+ 卡片（configs/）
+├── scripts/                  build-libjpeg.sh / build-mbedtls.sh / build-ota.sh
+│                             find-toolchain.sh / find-tpu-sdk.sh（工具链与 TPU SDK 定位）
 └── README.md
 ```
 
@@ -84,10 +90,11 @@ static/ (index.html + assets/)  --打包-->  板上 $AKA_HOME/static/
 
 ## 构建
 
-### 用 make 构建（orb / macOS 通用）
+### 用 make 构建（Linux / orb / macOS 通用）
 
-顶层 `cpp/Makefile` 用 make 驱动整个构建。**在 orb 里直接 `make`**；在 macOS 上
-`make` 会自动经 `orb run` 转发交叉编译（产物落在共享目录）：
+顶层 `cpp/Makefile` 用 make 驱动整个构建。**装了 riscv64-unknown-linux-musl 工具链的
+Linux 上直接 `make`**（工具链与 TPU SDK 位置自动探测，见下）；在 orb 里直接 `make`；
+在 macOS 上 `make` 会自动经 `orb run` 转发交叉编译（产物落在共享目录）：
 
 ```sh
 cd cpp
@@ -129,9 +136,28 @@ make clean                # 清理全部构建产物
 
 说明：
 
-- 交叉编译需要 riscv64-unknown-linux-musl 工具链（默认
-  `/home/junbo_dai/riscv64-linux-musl-x86_64`，orb 内）；工具链路径可用
-  `make -f Makefile.cross CXX=/path/to/riscv64-unknown-linux-musl-g++` 覆盖
+- 交叉编译需要 riscv64-unknown-linux-musl 工具链，且必须支持 T-Head 扩展
+  （构建用 `-mcpu=c906fdv`）：Xuantie 官方 toolchain（如
+  `akars/toolchains/xuantie-v3.4.0`）满足；musl.cc 的通用 GCC 不支持该 `-mcpu`，会编译报错
+- 工具链位置由 `cpp/scripts/find-toolchain.sh` 自动探测，顺序：
+  `$TOOLCHAIN_PREFIX` → PATH 里的 `riscv64-unknown-linux-musl-gcc` →
+  `$AKARS_TOOLCHAIN_DIR` → `~/code/*/toolchains/*/`、`~/code/*/*/toolchains/*/`
+  （含 `~/code/company/akars/toolchains/`）、`~/toolchains/*/` →
+  `/opt`、`/usr/local`、`~` 下的 `riscv64-linux-musl-x86_64` →
+  `/home/junbo_dai/riscv64-linux-musl-x86_64`（原开发机 orb 内默认路径）。
+  候选须同时包含 `gcc`、`g++`、`ar`。也可指定工具链根目录、`bin/` 目录，
+  查找脚本会校验并转换为前缀。探测不中或要指定别的工具链时显式给前缀（末尾带 `-`）：
+  `TOOLCHAIN_PREFIX=/path/to/bin/riscv64-unknown-linux-musl- make`；
+  直接使用交叉 Makefile 时也可只给
+  `make -f Makefile.cross CXX=/path/to/riscv64-unknown-linux-musl-g++`，由该路径推导配套工具；
+  环境中导出的本机 `CXX=g++` 会被忽略
+- **TPU SDK**（`cviruntime`，板上跑 YOLO 用，仓库里不 vendor）同样自动探测，见
+  `cpp/scripts/find-tpu-sdk.sh`（`$TPU_SDK_DIR` → `akars/toolchains/tpu-sdk-sg200x` →
+  `~/code/*/toolchains/...`、`~/code/*/*/toolchains/...` →
+  `/opt`、`~` → `/home/junbo_dai/cvitek_tpu_sdk`）。
+  SDK 须包含 `include/cviruntime.h` 和 `lib/libcviruntime-static.a`。
+  默认 `WITH_TPU=1`（板子要真推理）；找不到 SDK 时**明确报错**而不是悄悄编桩，
+  只编桩时显式 `make WITH_TPU=0`（这样出来的包在板上不做识别）
 - `capp` 目标带 FORCE：每次重跑交叉编译（内部增量，秒级），防止 `bin/aka-capp`
   被本机 host 构建误覆盖成非 RISC-V 二进制
 - 本机开发调试构建用 `cd capp && make`，输出 `bin/aka-capp-dev`（macOS/Linux 版），
@@ -143,7 +169,7 @@ make clean                # 清理全部构建产物
 板上要什么由**实体文件**说了算：`cpp/board/` 就是 `$AKA_HOME/` 的镜像 ——
 `config.toml`、`init.sh`/`stop.sh`/`init_ap_web.sh`/`S97akaap`、`https_init.sh`、
 `arm_angles*.json`、`speed_config.json`、`VERSION`、`start_img.jpg`、
-以及 `demo/`（动作脚本 + 模型 + 卡片配置）全部躺在那儿。想改板上哪个文件就直接改那里的实体文件，
+以及 `demo/`（动作配置 + 模型 + 卡片配置）全部躺在那儿。想改板上哪个文件就直接改那里的实体文件，
 不用碰构建脚本。
 
 `make package` 只做两件事：
@@ -153,7 +179,7 @@ make clean                # 清理全部构建产物
 
 两份包**只允许编译产物的内容不同**：那几个 ELF（`aka-capp`、`tools/*`）与前端 bundle
 （`static/assets/index.js`）。文件集合、权限、以及其余一切文本文件（`config.toml`、
-`*.sh`、`*.json`、`demo/*.lua`、`static/index.html`…）必须逐字节相同 —— 免得部署时
+`*.sh`、`*.json`、`static/index.html`…）必须逐字节相同 —— 免得部署时
 才发现“这个包少了张图”或者“两个包的脚本不一样”。
 
 所以"这个文件到底哪来的"这类问题，答案只有两种：要么在 `cpp/board/` 里，
@@ -175,10 +201,10 @@ $AKA_HOME/
 ├── speed_config.json         # 行驶速度配置
 ├── VERSION                   # 版本文件（OTA 用）
 ├── demo/                     # demo 相关全在这一个目录下（仓库 cpp/board/demo/ 镜像过来）
-│   ├── grab.lua              #   **动作脚本**（预定义、与模型无关，模型从 params.model 读）
-│   ├── approach.lua          #   另一个动作：只接近瞄准、不夹取
+│   ├── grab.json             #   追踪动作默认参数：到位后抓取，与模型无关
+│   ├── approach.json         #   追踪动作默认参数：只接近瞄准、不夹取
 │   ├── models/*.cvimodel     #   模型库
-│   └── configs/<卡片名>.json  #   **卡片**：{"action":..,"model":..,+ 四个参数}（用户建的）
+│   └── configs/<卡片名>.json  #   卡片：{"action":..,"model":..,+ 参数覆盖}（用户建的）
 ├── init.sh                   # 启动（自愈循环）
 ├── stop.sh                   # 停止
 ├── init_ap_web.sh            # AP 热点 + 开机自启配置（开机广播 AP，访问 192.168.4.1）
@@ -461,7 +487,7 @@ capp 同时支持 HTTP 和 HTTPS：默认 `:80` 与 `:443` 共存。443 是浏�
 | `GET /api/camera/status` `POST /api/camera/open|close` `GET /api/camera/stream|snapshot|speed|all_status` | 摄像头 |
 | `GET /api/detect?model=<名字>&conf=&iou=` | 单帧推理：取当前帧跑一次模型，只回框的四个角（原像素坐标）。模型必填、裸名字映射 `demo/models/<名字>.cvimodel`；`conf`/`iou` 可选（默认 0.25 / 0.45） |
 | `POST /api/models/upload?name=<名字>` `POST /api/models/delete` | 模型上传/删除：平台把模型文件推到 `demo/models/`（body 为文件；同名覆盖、覆盖即生效）；删除只删文件，用到它的卡片变成"模型缺失"（重传同名即复活） |
-| `POST /api/demo/run` `GET /api/demo/status` `POST /api/demo/stop` | 跑**动作脚本**（`demo/grab.lua`、`demo/approach.lua`；模型用 `params.model` 传）。安全兜底（限速/被接管/掉线/内存）在宿主里；执行方式 `mode=once|loop`：**once 最多 5 分钟**（到点宿主自己收工），loop 没有总时长上限 |
+| `POST /api/demo/run` `GET /api/demo/status` `POST /api/demo/stop` | 运行 C++ 状态机，动作默认值来自 `demo/grab.json`、`demo/approach.json`；`run` 接收 `action`（兼容旧 `script`）和 `params.model`。执行器强制限速、停止、接管、掉线检查；`once` 最多 5 分钟，`loop` 无总时长上限 |
 | `GET /api/demo/list|name|config` `POST /api/demo/init|stop|config|delete` | demo 卡片 = **动作 × 模型**（用户建，一份配置一张卡 `demo/configs/<卡片名>.json`）。init 两种形状：`{"name":卡片名}` 或 `{"action":..,"model":..}` |
 | `GET /api/ota/version|status|check|upgrade/progress` `POST /api/ota/upgrade|update` | OTA |
 | `GET /api/system/info|ip|heartbeat` | 系统 |
@@ -469,6 +495,10 @@ capp 同时支持 HTTP 和 HTTPS：默认 `:80` 与 `:443` 共存。443 是浏�
 | `GET/POST /api/config/speed` | 速度配置 |
 | `WS /ws/control` | 二进制控制通道（0xAA 摇杆 / 0xDD JSON / 0xBB 状态） |
 | `GET /` 及 `/assets/*` | 前端静态文件（SPA fallback → index.html） |
+
+Demo 调参无需重新编译，详见 [动作与卡片 JSON 配置](board/demo/README.md)。
+执行核心与 POSIX/设备执行器分离；在 Chenlong/tgoskits 上仍需验证线程、摄像头、串口和推理适配。
+开发机可用 `make -C cpp/capp test-demo`（仓库根执行）验证状态机、配置、接口与控制权交接，无需硬件。
 
 ## 板载屏显示（摄像头 → /dev/fb0）
 

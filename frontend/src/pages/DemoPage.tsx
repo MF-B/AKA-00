@@ -8,16 +8,16 @@ import {S} from "../styles";
 import {useViewportScale} from "../hooks/useViewportScale";
 
 // 与后端 /api/demo/list 对齐。**一张卡片 = 动作 × 模型**：
-// 动作是预定义的通用脚本（grab / approach …，与模型无关），模型是 demo/models 里的一颗；
+// 动作是预定义的 JSON 配置（grab / approach …，与模型无关），模型在 demo/models 中；
 // 卡片由用户在这里新建，名字随便起（中文也行），参数存在卡片的配置里。
 interface DemoInfo {
     name: string;       // 卡片名（用户起的）
-    action: string;     // 动作脚本名（demo/<action>.lua）
+    action: string;     // 动作配置名（demo/<action>.json）
     model: string;      // 模型名（demo/models/<model>.cvimodel）
-    ready: boolean;     // 动作脚本与模型文件都在
+    ready: boolean;     // 动作配置有效且模型文件存在
     error?: string;     // 缺什么（缺了也照样列出来，点开始会报错）
 }
-// 动作清单：name 是脚本第一行 `-- name: 接近瞄准` 给的显示名，缺省就是文件名
+// 动作清单：name 来自 JSON 显示名，缺省使用文件名
 interface ActionInfo { id: string; name: string; }
 
 // 执行方式：once = 跑一遍就结束；loop = 跑完接着跑，直到你按停止（**没有超时**）
@@ -109,7 +109,7 @@ const DemoPage = () => {
     useEffect(() => { fetchDemoList(); }, [fetchDemoList]);
 
     // 运行状态**以后端为准**（原来是纯本地 state）：轮询 /api/demo/status，
-    // 这样切到别的页面再回来、刷新浏览器、甚至脚本是别的客户端起的，都能正确显示
+    // 切换页面、刷新浏览器或其他客户端发起 Demo 后，都能正确显示状态。
     // "哪张卡片在跑"并给出停止按钮。
     useEffect(() => {
         let alive = true;
@@ -548,7 +548,7 @@ const DemoPage = () => {
             <ConfirmDialog
                 open={deleteTarget !== null}
                 title="删除 Demo"
-                message={`删除「${deleteTarget ?? ""}」？这张卡片的参数会一起删掉（动作脚本和模型文件不受影响）。`}
+                message={`删除「${deleteTarget ?? ""}」？这张卡片的参数会一起删掉（动作配置和模型文件不受影响）。`}
                 confirmText="删除"
                 danger
                 onConfirm={doDelete}

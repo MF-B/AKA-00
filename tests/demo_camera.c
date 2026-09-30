@@ -21,11 +21,11 @@
  *
  * 编译（在仓库根执行；libjpeg 用 cpp/third_party/jpeg 里那份 riscv64 musl 交叉产物）：
  *
- *   # 板子 (riscv64 musl, SG2002) 交叉编译 —— macOS 上经 orb 转发：
- *   orb run -p bash -lc 'export PATH=/home/junbo_dai/riscv64-linux-musl-x86_64/bin:$PATH; \
- *     cd /Users/junbo.dai/projects/AKA-00 && \
- *     riscv64-unknown-linux-musl-gcc -O2 -Wall -static -o demo_camera tests/demo_camera.c \
- *       -Icpp/third_party/jpeg/include cpp/third_party/jpeg/lib/libjpeg.a'
+ *   # 板子 (riscv64 musl, SG2002) 交叉编译（在仓库根执行；工具链位置自动探测）：
+ *   PREFIX=$(sh cpp/scripts/find-toolchain.sh); \
+ *     ${PREFIX}gcc -O2 -Wall -static -o demo_camera tests/demo_camera.c \
+ *       -Icpp/third_party/jpeg/include cpp/third_party/jpeg/lib/libjpeg.a
+ *   #（cpp/ 顶层 make demos 也是这条命令，产物落在 cpp/csrc/build-cross/demos/）
  *
  *   # 本机 (macOS) 编译验证（Linux 专属代码自动跳过，仅跑 JPEG 冒烟）：
  *   gcc -O2 -Wall -o /tmp/demo_camera tests/demo_camera.c \

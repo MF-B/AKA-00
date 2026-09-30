@@ -1,4 +1,4 @@
-// demo 资源：模型与动作脚本
+// demo 资源：模型与动作 JSON 配置
 //
 // 由 capp/src/services.cpp 按域拆出来（对应 app/services/*.py 的分法）。
 // 路径、命名校验、模型落盘（原子换入）。
@@ -62,12 +62,8 @@ std::string model_path(AppContext& ctx, const std::string& name) {
     return model_dir(ctx) + "/" + name + ".cvimodel";
 }
 
-std::string action_script_path(AppContext& ctx, const std::string& name) {
-    return ctx.app_dir + "/demo/" + name + ".lua";
-}
-
-bool action_script_exists(AppContext& ctx, const std::string& name) {
-    return access(action_script_path(ctx, name).c_str(), F_OK) == 0;
+std::string action_config_path(AppContext& ctx, const std::string& name) {
+    return ctx.app_dir + "/demo/" + name + ".json";
 }
 
 csrc::Json save_model_upload(AppContext& ctx, const std::string& name, const std::string& content) {
@@ -138,8 +134,5 @@ bool valid_card_name(const std::string& name) {
     }
     return true;
 }
-
-/// 取一帧跑一次推理 → 框列表（原图像素坐标）。`/api/detect` 与脚本原语共用同一条链：
-/// 模型懒加载 / 文件变了重载 / 取原生帧 / 推理。错误串与对外契约保持一致。
 
 }  // namespace capp

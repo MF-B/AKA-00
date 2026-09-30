@@ -81,7 +81,7 @@ export const demo = {
         body: JSON.stringify({}),
     }).then(r => r.json()),
     // 正在跑什么：界面用它显示"哪张卡片在运行"、停止按钮指向谁。
-    // **状态以后端为准** —— 否则切页面/刷新就丢，也看不到别的客户端起的脚本。
+    // 状态以后端为准，刷新页面也能看到其他客户端发起的 Demo。
     status: () => fetch("/api/demo/status").then(r => r.json()),
     // 一张 demo 卡片 = 动作 × 模型（+ 参数），配置存在 demo/configs/<卡片名>.json。
     // getConfig 读一张；setConfig 既用来"新建卡片"（带 action/model）也用来改参数。
@@ -94,7 +94,7 @@ export const demo = {
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({name, ...params}),
         }).then(r => r.json()),
-    // 删一张卡片（配置一起删；动作脚本与模型文件不受影响）
+    // 删一张卡片（配置一起删；动作配置与模型文件不受影响）
     remove: (name: string) =>
         fetch("/api/demo/delete", {
             method: "POST",

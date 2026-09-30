@@ -1,11 +1,12 @@
-// Demo 卡片与动作脚本
+// Demo 卡片与 C++ 状态机
 //
 // 入口：register_demo_routes()（由 src/routes.cpp 的 register_routes 调用）
 //
 // 由 capp/src/routes.cpp 按域拆出来（对照 app/routes/*.py 的分法）。
-// 对应 app/routes/demo.py + 动作脚本那条 /api/demo/run。
+// 对应 app/routes/demo.py + 状态机入口 /api/demo/run。
 
 #include "routes_internal.hpp"
+#include "capp/demo_config.hpp"
 
 #include <cstdio>
 #include <unistd.h>
@@ -13,21 +14,21 @@
 namespace capp {
 namespace routes {
 
-// ── Demo 卡片与动作脚本 ──
+// ── Demo 卡片与动作配置 ──
 
 namespace {
 
-/// 跑完再返回：等脚本结束，**只回一个"完成没有"的结论**（字段与 /api/demo/status 一致）。
+/// 跑完再返回：等待流程结束，只回 completed（失败时附 error）；详情从 status 读取。
 /// init 与 run 两条路由的收尾一模一样 —— 抽出来，别再抄第二份（上次改超时文案就得改两处）。
 void finish_wait(AppContext& ctx, HttpResponse& resp) {
-    const bool done = wait_script_done(ctx, kDemoWaitMaxSeconds);
-    const Json st = script_status(ctx);
+    const bool done = wait_demo_done(ctx, kDemoWaitMaxSeconds);
+    const Json st = demo_status(ctx);
     Json out;
     out["completed"] = done && st.gets("state") == "done";
     if (!out.getb("completed")) {
         out["error"] = done ? st.gets("message")
                             : "timeout: 等了 " + std::to_string((long long)kDemoWaitMaxSeconds) +
-                                  " 秒还没跑完（脚本卡在不调原语的死循环里？试 POST /api/demo/stop）";
+                                  " 秒还没跑完（底层设备调用未返回）";
     }
     resp.set_json(out);
 }
@@ -37,40 +38,38 @@ void finish_wait(AppContext& ctx, HttpResponse& resp) {
 void register_demo_routes(Router& router, AppContext& ctx) {
 
 
-    // ── 动作脚本（demo/*.lua）── 接口都挂在 /api/demo 下（跟卡片/配置同一套命名）
-    //
-    // `/api/demo/run` 是**最底层**的那条：直接跑某个动作脚本 + 任意 params（不校验模型），
-    // 调试/一次性用；正常跑 demo 走 `/api/demo/init`（跑卡片，或 action+model，会先校验
-    // 动作脚本和模型文件都在）。
-    // 把"看→对准→靠近→抓"这类要反复调参的流程写成脚本，改一行存盘重跑，不用重编部署。
-    // 安全兜底（限速/被人的指令取代/底盘掉线/内存与卡死）全在宿主里，脚本绕不过去。
+    // /run takes an action ID plus params; the legacy "script" field remains accepted.
     router.add("POST", "/api/demo/run", [&ctx](const HttpRequest& req, HttpResponse& resp, ClientConn&, AppContext&) {
         const Json payload = req.json();
         if (!payload.is_object()) {
             resp.set_error("json body is required", 400);
             return;
         }
-        const std::string name = payload.gets("script");
+        const std::string name = payload.gets("action", payload.gets("script"));
         if (name.empty()) {
-            resp.set_error("script 必填（动作名，例：grab）", 400);
+            resp.set_error("action 必填（动作名，例：grab；兼容 script 字段）", 400);
             return;
         }
-        // params 原样给脚本（含 mode=once|loop）；**没有 max_seconds**，跑多久看模式与停止
+        // params 覆盖动作默认值（含 mode=once|loop）；时限由执行器强制。
         const Json* params = payload.get("params");
+        if (!params || !params->is_object()) {
+            resp.set_error("params 必须是 JSON 对象（含 model）", 400);
+            return;
+        }
         // **默认就等它跑完**（调用方一个请求就能拿到"做完了没有"）；显式传 "wait": false 才立刻返回。
         // 但 loop 模式不会自己结束 —— 那种情况默认**不等**（否则等于把连接挂死），
         // 只有显式要求 wait 才 400（那是真没意义）。
         const bool has_wait = payload.get("wait") != nullptr;
-        const bool loop_mode = params && params->gets("mode") == "loop";
+        const bool loop_mode = params->gets("mode") == "loop";
         if (loop_mode && has_wait && payload.getb("wait", true)) {
             resp.set_error("loop 模式不会自己结束，wait 没有意义（要停就 POST /api/demo/stop）", 400);
             return;
         }
         const bool wait = loop_mode ? false : (has_wait ? payload.getb("wait", true) : true);
-        Json r = script_run(ctx, name, params ? *params : Json());
+        Json r = demo_run(ctx, name, *params);
         if (!r.getb("ok") || !wait) {
             if (r.getb("ok")) r["completed"] = false;   // 只是"起来了"，还没跑完
-            resp.set_json(r, r.getb("ok") ? 200 : 400);
+            resp.set_json(r, r.getb("ok") ? 200 : (r.getb("busy") ? 409 : 400));
             return;
         }
         // 同样精简到一个标志（与 /api/control 的 completed 同一个含义）
@@ -78,7 +77,7 @@ void register_demo_routes(Router& router, AppContext& ctx) {
     });
 
     router.add("GET", "/api/demo/status", [&ctx](const HttpRequest&, HttpResponse& resp, ClientConn&, AppContext&) {
-        resp.set_json(script_status(ctx));
+        resp.set_json(demo_status(ctx));
     });
 
     // ── /api/demo ── 一张卡片 = **动作 × 模型**（用户在界面上新建，见文件上方 DemoCard 的说明）
@@ -88,7 +87,9 @@ void register_demo_routes(Router& router, AppContext& ctx) {
     router.add("GET", "/api/demo/list", [&ctx](const HttpRequest&, HttpResponse& resp, ClientConn&, AppContext&) {
         Json demos(Json::Type::Array);
         for (const auto& c : list_demo_cards(ctx)) {
-            const bool has_action = action_script_exists(ctx, c.action);
+            TrackingConfig config;
+            std::string error;
+            const bool has_action = resolve_demo_config(ctx, c.action, c.params, config, error);
             const bool has_model = access(model_path(ctx, c.model).c_str(), F_OK) == 0;
             Json item;
             item["name"] = c.name;                                  // 卡片名（前端只认这个）
@@ -97,9 +98,9 @@ void register_demo_routes(Router& router, AppContext& ctx) {
             item["script"] = has_action ? c.action : "";            // 兼容老字段：动作名
             item["path"] = has_model ? model_path(ctx, c.model) : "";
             item["kind"] = "card";
-            // 动作脚本或模型文件缺了也照样列出来 —— 点开始会明确报错，别让卡片凭空消失
+            // 动作配置无效或模型文件缺了也照样列出来，启动时再说明错误。
             item["ready"] = has_action && has_model;
-            item["error"] = !has_action ? ("动作脚本缺失：demo/" + c.action + ".lua")
+            item["error"] = !has_action ? error
                           : (!has_model ? ("模型文件缺失：demo/models/" + c.model + ".cvimodel") : "");
             demos.push_back(item);
         }
@@ -107,7 +108,7 @@ void register_demo_routes(Router& router, AppContext& ctx) {
         for (const auto& a : list_actions(ctx)) {
             Json x;
             x["id"] = a.id;
-            x["name"] = a.name;      // 脚本第一行 `-- name: 接近瞄准` 给的显示名
+            x["name"] = a.name;      // 动作 JSON 的 name 字段
             actions.push_back(x);
         }
         Json models(Json::Type::Array);
@@ -120,10 +121,10 @@ void register_demo_routes(Router& router, AppContext& ctx) {
     });
 
     router.add("GET", "/api/demo/name", [&ctx](const HttpRequest&, HttpResponse& resp, ClientConn&, AppContext&) {
-        const Json st = script_status(ctx);
+        const Json st = demo_status(ctx);
         Json j;
         j["name"] = st.gets("card");       // 跑的是哪张卡片
-        j["action"] = st.gets("script");   // 动作脚本名
+        j["action"] = st.gets("script");   // 动作配置名
         j["model"] = st.gets("model");
         resp.set_json(j);
     });
@@ -163,13 +164,10 @@ void register_demo_routes(Router& router, AppContext& ctx) {
                 resp.set_error("要么给 name（跑已建的卡片），要么给 action + model（直接跑）", 400);
                 return;
             }
-            params["target_size"] = Json((int64_t)payload.geti("target_size", kDemoTargetSizeDefault));
-            params["speed"] = Json((int64_t)payload.geti("speed", kDemoSpeedDefault));
-            params["turn_speed"] = Json((int64_t)payload.geti("turn_speed", kDemoTurnSpeedDefault));
-            params["mode"] = (payload.gets("mode") == "loop") ? "loop" : "once";
+            params = demo_params_only(payload);
         }
 
-        // 名字都要拼进路径，且必须真存在 —— 在这里挡掉，别让它变成脚本里一句含糊的报错
+        // 名字都要拼进路径，且模型必须存在；动作配置由 demo_run 解析校验。
         if (!valid_model_name(action)) {
             resp.set_error("动作名非法（只允许字母数字与 _ - .）：" + action, 400);
             return;
@@ -178,20 +176,14 @@ void register_demo_routes(Router& router, AppContext& ctx) {
             resp.set_error("模型名非法（只允许字母数字与 _ - .）：" + model, 400);
             return;
         }
-        if (!action_script_exists(ctx, action)) {
-            resp.set_error("动作脚本不存在：demo/" + action + ".lua", 400);
-            return;
-        }
         if (access(model_path(ctx, model).c_str(), F_OK) != 0) {
             resp.set_error("模型不存在：demo/models/" + model + ".cvimodel", 400);
             return;
         }
 
         // 请求里显式传的参数优先（卡片里那份作底）
-        if (payload.get("target_size")) params["target_size"] = Json(payload.geti("target_size", kDemoTargetSizeDefault));
-        if (payload.get("speed")) params["speed"] = Json(payload.geti("speed", kDemoSpeedDefault));
-        if (payload.get("turn_speed")) params["turn_speed"] = Json(payload.geti("turn_speed", kDemoTurnSpeedDefault));
-        if (payload.get("mode")) params["mode"] = payload.gets("mode");
+        const Json overrides = demo_params_only(payload);
+        for (const auto& field : overrides.object()) params[field.first] = field.second;
 
         // **默认等它跑完**（一个请求拿到完成标志）；显式 "wait": false 才立刻回 started。
         // loop 模式不会自己结束：默认不等（否则挂死连接），只有显式要求才 400。
@@ -203,15 +195,19 @@ void register_demo_routes(Router& router, AppContext& ctx) {
         }
         const bool wait = loop_mode ? false : (has_wait ? payload.getb("wait", true) : true);
 
-        // ★ 模型来自卡片/请求，**不是卡片名** —— 搞错的话脚本会去开
+        // 模型来自卡片/请求，**不是卡片名** —— 搞错的话执行器会去开
         //   demo/models/<卡片名>.cvimodel，报错长成"注册模型失败"，极具误导性
         params["model"] = model;
-        params["card"] = card;   // 让状态能回答"现在跑的是哪张卡"；脚本不用管它
+        params["card"] = card;   // 让状态能回答"现在跑的是哪张卡"
 
-        const Json r = script_run(ctx, action, params);
+        const Json r = demo_run(ctx, action, params);
 
         if (!r.getb("ok")) {
-            const Json st = script_status(ctx);
+            if (!r.getb("busy")) {
+                resp.set_error(r.gets("error"), 400);
+                return;
+            }
+            const Json st = demo_status(ctx);
             Json j;
             j["status"] = "already_running";
             j["pid"] = Json((int64_t)getpid());
@@ -230,14 +226,14 @@ void register_demo_routes(Router& router, AppContext& ctx) {
         j["pgid"] = Json((int64_t)getpid());
         j["completed"] = false;               // 只是"起来了"，还没跑完
         if (!wait) {
-            resp.set_json(j);                 // 默认：立刻回 started，界面靠 /api/demo/status 轮询
+            resp.set_json(j);                 // 不等待：立刻回 started，界面靠 status 轮询
             return;
         }
-        // 跑完再返回：字段与 /api/demo/status 一致 + completed
+        // 跑完再返回：completed，失败时附 error
         finish_wait(ctx, resp);
     });
 
-    // 卡片配置：GET 读一张、POST 新建或覆盖（动作 + 模型 + 四个参数）
+    // 卡片配置：GET 读有效参数、POST 新建或合并参数覆盖（动作 + 模型 + 参数）
     router.add("GET", "/api/demo/config", [&ctx](const HttpRequest& req, HttpResponse& resp, ClientConn&, AppContext&) {
         const std::string name = req.query_param("name");
         if (name.empty()) {
@@ -253,7 +249,14 @@ void register_demo_routes(Router& router, AppContext& ctx) {
             resp.set_error("没有这张卡片（或配置读不了）：demo/configs/" + name + ".json", 400);
             return;
         }
-        Json j = c.params;
+        TrackingConfig config;
+        std::string error;
+        if (!resolve_demo_config(ctx, c.action, c.params, config, error)) {
+            resp.set_error(error, 400);
+            return;
+        }
+        Json j = tracking_params_json(config);
+        j["mode"] = c.params.gets("mode", "once");
         j["name"] = c.name;
         j["action"] = c.action;
         j["model"] = c.model;
@@ -289,27 +292,33 @@ void register_demo_routes(Router& router, AppContext& ctx) {
             resp.set_error("模型名非法（只允许字母数字与 _ - .）：" + model, 400);
             return;
         }
-        if (!action_script_exists(ctx, action)) {
-            resp.set_error("动作脚本不存在：demo/" + action + ".lua", 400);
-            return;
-        }
         if (access(model_path(ctx, model).c_str(), F_OK) != 0) {
             resp.set_error("模型不存在：demo/models/" + model + ".cvimodel", 400);
             return;
         }
-        if (!save_demo_card(ctx, name, action, model, payload)) {
+        // Preserve advanced overrides when the existing web form updates only its basic fields.
+        Json params(Json::Type::Object);
+        DemoCard existing;
+        if (load_demo_card(ctx, name, existing) && existing.action == action && existing.model == model)
+            params = existing.params;
+        const Json overrides = demo_params_only(payload);
+        for (const auto& field : overrides.object()) params[field.first] = field.second;
+        TrackingConfig config;
+        std::string error;
+        if (!resolve_demo_config(ctx, action, params, config, error)) {
+            resp.set_error(error, 400);
+            return;
+        }
+        if (!save_demo_card(ctx, name, action, model, params)) {
             resp.set_error("写入 demo/configs/" + name + ".json 失败", 500);
             return;
         }
-        Json j;
+        Json j = tracking_params_json(config);
         j["ok"] = true;
         j["name"] = name;
         j["action"] = action;
         j["model"] = model;
-        j["target_size"] = Json((int64_t)payload.geti("target_size", kDemoTargetSizeDefault));
-        j["speed"] = Json((int64_t)payload.geti("speed", kDemoSpeedDefault));
-        j["turn_speed"] = Json((int64_t)payload.geti("turn_speed", kDemoTurnSpeedDefault));
-        j["mode"] = (payload.gets("mode") == "loop") ? "loop" : "once";
+        j["mode"] = params.gets("mode", "once");
         resp.set_json(j);
     });
 
@@ -336,8 +345,8 @@ void register_demo_routes(Router& router, AppContext& ctx) {
     });
 
     router.add("POST", "/api/demo/stop", [&ctx](const HttpRequest&, HttpResponse& resp, ClientConn&, AppContext&) {
-        const Json r = script_stop(ctx);
-        const Json st = script_status(ctx);
+        const Json r = demo_stop(ctx);
+        const Json st = demo_status(ctx);
         Json j;
         j["status"] = r.gets("state") == "idle" ? "already_stopped" : "stopped";
         j["name"] = st.gets("card");

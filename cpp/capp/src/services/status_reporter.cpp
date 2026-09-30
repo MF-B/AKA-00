@@ -49,10 +49,6 @@ std::string read_version(AppContext& ctx) {
 }
 
 
-// ── 跨 TU 的控制原语 ──
-// 定义必须在 capp 作用域（context.hpp 有声明；脚本宿主 capp/script.cpp 也要用），
-// 不能放进上面的匿名 namespace，否则声明与定义分属两个名字，重载解析会歧义。
-
 }  // namespace
 
 void report_status(AppContext& ctx, const std::string& action) {

@@ -23,7 +23,8 @@ OUT="$HERE/../third_party/mbedtls"
 WORK="$HERE/../third_party/build-mbedtls"
 VERSION="3.6.7"
 
-TOOLCHAIN_PREFIX="${TOOLCHAIN_PREFIX:-/home/junbo_dai/riscv64-linux-musl-x86_64/bin/riscv64-unknown-linux-musl-}"
+# 工具链：校验并归一化显式前缀，未设时自动探测。
+TOOLCHAIN_PREFIX="$(sh "$HERE/find-toolchain.sh")" || exit 1
 CC="${TOOLCHAIN_PREFIX}gcc"
 AR="${TOOLCHAIN_PREFIX}ar"
 
@@ -41,14 +42,18 @@ if [ ! -d "$SRC_DIR/framework" ] || [ ! -d "$SRC_DIR/library" ]; then
     ( cd "$SRC_DIR" && git submodule update --init --depth 1 >/dev/null )
 fi
 
+rm -rf "$OUT"          # 清旧安装（含历史 lib64/ 布局残渣：Makefile.cross 固定从 <prefix>/lib 取库）
 mkdir -p "$OUT"
 rm -rf "$WORK/build"
 mkdir -p "$WORK/build"
 cd "$WORK/build"
 
 echo "[mbedtls] configuring for riscv64 musl (static)..."
+# CMAKE_INSTALL_LIBDIR 必须显式给 lib：默认值跟构建机的发行版走（Fedora 上是 lib64），
+# 而 csrc/capp 的 Makefile.cross 只认 <prefix>/lib。
 cmake "$SRC_DIR" \
     -DCMAKE_INSTALL_PREFIX="$OUT" \
+    -DCMAKE_INSTALL_LIBDIR=lib \
     -DCMAKE_C_COMPILER="$CC" \
     -DCMAKE_AR="$AR" \
     -DCMAKE_C_FLAGS="-O2 -mcpu=c906fdv -mabi=lp64d" \

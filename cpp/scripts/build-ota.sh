@@ -83,9 +83,9 @@ PAYLOAD_OFFSET=0000000
 # `demo/configs/`（一张 demo 卡片一份：动作 + 模型 + 参数）**不在这个名单里**，但
 # 也不是丢弃 —— 它是目录，在 swap_in 里单独按"**板上优先**"保留（用户在界面上新建的
 # 卡片不能被升级冲掉）。`demo/models/` 同理单独处理，那边是"包里的优先"。
-# `demo/*.lua` 是**动作脚本**（grab/approach…，与模型无关），同样不在保留之列：
-# 它是仓库里的代码，升级按包里的结算 —— 想按模型/按卡片调参，**改 demo/configs/ 里的
-# 卡片配置，别改动作脚本**，否则升级就丢了。（configs 是"板上优先"，见 swap_in。）
+# `demo/*.json` 是动作默认配置（grab/approach…，与模型无关），不在保留之列：
+# 升级按新包替换，板上自行新增的动作默认配置也不保留。按模型/按卡片调参放在
+# demo/configs/ 里；新增动作默认配置应提交到仓库并打包。（configs 是"板上优先"。）
 KEEP_FILES="config.toml speed_config.json arm_angles.json cert.pem key.pem"
 
 extract_payload() {

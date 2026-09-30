@@ -4,13 +4,27 @@
 # 用法:
 #   make -f Makefile.cross                        # 带屏版本 → bin/aka-capp
 #   make -f Makefile.cross WITH_SCREEN=0          # 不带屏 → bin/aka-capp-noscreen
-#   make -f Makefile.cross CXX=/path/to/riscv64-unknown-linux-musl-g++ \
+#   make -f Makefile.cross TOOLCHAIN_PREFIX=/path/to/bin/riscv64-unknown-linux-musl- \
 #                          JPEG_DIR=/path/to/libjpeg
+#   make -f Makefile.cross CXX=/path/to/riscv64-unknown-linux-musl-g++
 #
 # JPEG_DIR 指向 libjpeg 安装前缀（含 include/ 与 lib/）。
 # 默认 third_party/jpeg —— 先跑一次 ../scripts/build-libjpeg.sh 生成
 # （riscv64 musl 交叉编译 libjpeg）；也可以指向自己的交叉 libjpeg。
 # =============================================================================
+
+# 显式前缀优先；只指定 CXX 时从交叉 g++ 推导前缀，其余情况自动探测。
+# 环境中的 CXX 不用于推导，避免登录 shell 导出的本机 g++ 混入交叉构建。
+CROSS_SCRIPTS := $(dir $(lastword $(MAKEFILE_LIST)))../scripts
+ifeq ($(origin TOOLCHAIN_PREFIX),undefined)
+ifeq ($(origin CXX),command line)
+TOOLCHAIN_PREFIX := $(patsubst %g++,%,$(CXX))
+endif
+endif
+override TOOLCHAIN_PREFIX := $(shell TOOLCHAIN_PREFIX='$(TOOLCHAIN_PREFIX)' sh $(CROSS_SCRIPTS)/find-toolchain.sh)
+ifeq ($(TOOLCHAIN_PREFIX),)
+$(error 找不到 riscv64-unknown-linux-musl 交叉工具链：设 TOOLCHAIN_PREFIX=/path/to/bin/riscv64-unknown-linux-musl-，见 ../scripts/find-toolchain.sh)
+endif
 
 # 带屏 / 不带屏两个变体（与 csrc、顶层 Makefile 的 screen/noscreen 对齐）
 WITH_SCREEN ?= 1
@@ -28,9 +42,12 @@ endif
 #   WITH_TPU=0         → 不链（csrc 那边同时切到桩，否则 csrc 会引用未定义的符号）
 # 注意：SDK 只有 libcviruntime.so 的话静态链接会失败，这里用的是 SDK 里的
 # -static.a 版本；真的静态链不过时的退路是改成 -lcviruntime + rpath 指向 libs/。
-WITH_TPU    ?= 1
-TPU_SDK_DIR ?= /home/junbo_dai/cvitek_tpu_sdk
+WITH_TPU ?= 1
 ifeq ($(WITH_TPU),1)
+override TPU_SDK_DIR := $(shell TPU_SDK_DIR='$(TPU_SDK_DIR)' sh $(CROSS_SCRIPTS)/find-tpu-sdk.sh)
+ifeq ($(TPU_SDK_DIR),)
+$(error 找不到 CVITEK TPU SDK（$(TPU_SDK_DIR)）：设 TPU_SDK_DIR=/path/to/tpu-sdk-sg200x，或 WITH_TPU=0 只编桩，见 ../scripts/find-tpu-sdk.sh)
+endif
 TPU_LDFLAGS := -L$(TPU_SDK_DIR)/lib \
                -Wl,--start-group -lcviruntime-static -lcvikernel-static -lcvimath-static -lz \
                -Wl,--end-group
@@ -39,19 +56,17 @@ TPU_LDFLAGS :=
 endif
 
 # 注意用 := 覆盖环境变量（orb 登录 shell 常导出 CXX=g++ 之类，会污染交叉编译）
-CXX      := /home/junbo_dai/riscv64-linux-musl-x86_64/bin/riscv64-unknown-linux-musl-g++
+CXX      := $(TOOLCHAIN_PREFIX)g++
 CSRC     := ../csrc
 JPEG_DIR ?= ../third_party/jpeg
 MBEDTLS_DIR ?= ../third_party/mbedtls
-LUA_DIR  ?= ../third_party/lua
 TARGET   := bin/aka-capp$(SCREEN_SUFFIX)
 CSRC_LIB := $(CSRC)/build-cross$(SCREEN_SUFFIX)/libcsrc.a
 
 CXXFLAGS := -std=c++17 -O3 -Wall -Wextra -mcpu=c906fdv -MMD -MP -mabi=lp64d \
             $(SCREEN_DEF) \
-            -Iinclude -I$(CSRC)/include -I$(JPEG_DIR)/include -I$(MBEDTLS_DIR)/include \
-            -I$(LUA_DIR)/include
-LDFLAGS  := -static -L$(JPEG_DIR)/lib -L$(MBEDTLS_DIR)/lib -L$(LUA_DIR)/lib $(TPU_LDFLAGS)
+            -Iinclude -I$(CSRC)/include -I$(JPEG_DIR)/include -I$(MBEDTLS_DIR)/include
+LDFLAGS  := -static -L$(JPEG_DIR)/lib -L$(MBEDTLS_DIR)/lib $(TPU_LDFLAGS)
 
 OBJDIR := build-cross$(SCREEN_SUFFIX)
 SRCS := $(wildcard src/*.cpp src/routes/*.cpp src/services/*.cpp src/http/*.cpp)
@@ -73,11 +88,11 @@ $(OBJDIR)/%.o: src/%.cpp | $(OBJDIR)
 
 $(CSRC_LIB):
 	$(MAKE) -f Makefile.cross -C $(CSRC) WITH_SCREEN=$(WITH_SCREEN) WITH_TPU=$(WITH_TPU) \
-	    TPU_SDK_DIR=$(TPU_SDK_DIR)
+	    TOOLCHAIN_PREFIX='$(TOOLCHAIN_PREFIX)' TPU_SDK_DIR='$(TPU_SDK_DIR)'
 
 $(TARGET): $(OBJS) $(CSRC_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(CSRC_LIB) \
-	    $(LDFLAGS) -ljpeg -llua -lmbedtls -lmbedx509 -lmbedcrypto -lm -lpthread
+	    $(LDFLAGS) -ljpeg -lmbedtls -lmbedx509 -lmbedcrypto -lm -lpthread
 	@echo "  ✓ aka-capp$(SCREEN_SUFFIX) (riscv64 static$(if $(SCREEN_SUFFIX), 不带屏, 带屏)) built"
 
 clean:

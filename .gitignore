@@ -18,6 +18,7 @@ cpp/capp/build/
 cpp/capp/build-noscreen/
 cpp/capp/build-cross/
 cpp/capp/build-cross-noscreen/
+cpp/capp/build-tests/
 cpp/capp/bin/
 cpp/third_party/
 cpp/dist/

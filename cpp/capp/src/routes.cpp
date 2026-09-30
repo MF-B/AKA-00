@@ -9,7 +9,7 @@
 //     routes/arm.cpp      /api/arm/*
 //     routes/camera.cpp   /api/camera/*
 //     routes/models.cpp   /api/detect + /api/models/* + /api/model/upload
-//     routes/demo.cpp     /api/demo/*（卡片与动作脚本）
+//     routes/demo.cpp     /api/demo/*（卡片与 C++ 状态机）
 //     routes/display.cpp  /api/display/*
 //     routes/ota.cpp      /api/ota/*
 //     routes/system.cpp   /api/system/*

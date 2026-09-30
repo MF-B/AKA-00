@@ -119,6 +119,10 @@ int main() {
     server.run();  // 阻塞直到 SIGTERM/SIGINT（on_signal → ctx.shutdown）
 
     // 退出清理
+    ctx.shutdown = true;
+    capp::demo_stop(ctx);
+    capp::join_demo_worker(ctx);
+    capp::wait_arm_done(ctx);   // 已启动的夹爪序列结束后才能释放设备与应用上下文
     capp::close_display(ctx);   // 先停显示线程（它要用摄像头最新帧）
     capp::close_camera(ctx);
     {

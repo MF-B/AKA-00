@@ -51,7 +51,7 @@ QQ群：901307286
 
 ```bash
 cd cpp
-make              # 一条龙：libjpeg/mbedtls/lua → csrc → capp → package → ota
+make              # 一条龙：libjpeg/mbedtls → csrc → capp → package → ota
 make screen       # 只出部署目录（= package）
 make ota          # 只出安装器（内部先 package）
 make noscreen     # 不带屏版本：dist-noscreen/
@@ -86,10 +86,10 @@ cd frontend && npm run build:noscreen   # 不带屏版 → static/
 | 区别 | 摄像头画面实时显示到板载 SPI 屏（`/dev/fb0`） | 整个显示栈编译期裁掉，二进制更小，完全不碰 framebuffer |
 
 两份包**除编译产物（ELF + 前端 bundle）外完全一致**：文件集合、权限、`config.toml`／
-`*.sh`／`demo/*.lua` 等文本文件逐字节相同；板上的二进制名都叫 `aka-capp`。
+`*.sh`／`demo/*.json` 等文本文件逐字节相同；板上的二进制名都叫 `aka-capp`。
 
 > 板上要哪些文件由**实体文件**说了算：`cpp/board/` 就是板上 `$AKA_HOME/` 的镜像。
-> 想改 `config.toml`、`init.sh`、demo 脚本，直接改那里的实体文件，不用碰构建脚本。
+> 想改 `config.toml`、`init.sh`、demo 动作配置，直接改那里的实体文件，不用碰构建脚本。
 
 ## 🚀 部署
 
@@ -183,7 +183,7 @@ AKA-00/
 │   ├── csrc/               #   平台与硬件层：摄像头、板载屏、串口、舵机、电机、推理
 │   ├── board/              #   板上 $AKA_HOME/ 的镜像（config.toml、init.sh、demo/…）
 │   ├── scripts/            #   第三方库构建 + 自解压安装器打包脚本
-│   └── third_party/        #   libjpeg / mbedTLS / Lua（交叉编译产物）
+│   └── third_party/        #   libjpeg / mbedTLS（交叉编译产物）
 ├── frontend/               # React 前端源码
 ├── static/                 # 前端构建产物，打包时收进部署目录
 ├── tests/                  # 板测工具（demo_camera / demo_image / bench_*）与测试脚本
@@ -205,7 +205,7 @@ AKA-00/
 | C++17 | 核心语言，静态编译到 riscv64-musl，单文件无运行时依赖 |
 | 自研 HTTP / WebSocket | POSIX socket + 线程，不引第三方 Web 框架 |
 | mbedTLS | HTTPS 监听与 TLS 终止 |
-| Lua 5.4 | demo 流程脚本宿主：原语在 C++，流程在脚本 |
+| C++ 状态机 + JSON | Demo 流程由状态机执行，动作与卡片参数可直接修改，无解释器依赖 |
 | libjpeg / V4L2 | 摄像头采集与 JPEG 解码 |
 | 算能 NPU | `.cvimodel` 模型推理（1 TOPS INT8） |
 
@@ -360,8 +360,8 @@ POST /api/models/delete              # {"name":"apple"}
 
 ### Demo（动作 × 模型）
 
-板上的一张卡片 = **动作脚本（`demo/*.lua`）× 模型（`demo/models/*.cvimodel`）+ 几个参数**
-（`target_size` / `speed` / `turn_speed` / `mode`），一份配置一张卡，存在
+板上的一张卡片 = **动作配置（`demo/*.json`）× 模型（`demo/models/*.cvimodel`）+ 参数覆盖**
+（`target_size` / `speed` / `turn_speed` / `mode` 及高级参数），一份配置一张卡，存在
 `demo/configs/<卡片名>.json`。
 
 ```bash
@@ -379,8 +379,11 @@ POST /api/demo/delete                            # {"name":"..."}
   `{"completed": false, "error": "..."}`。想立刻返回自己轮询就传 `"wait": false`。
 - `mode` 两种：`once`（默认，跑一遍，**最多 5 分钟**）、`loop`（跑完接着跑，**没有时长上限**，
   要停就 `POST /api/demo/stop`；它不会自己结束，所以默认不等，显式 `wait: true` 会被 400 拒掉）。
-- 卡片是用户在板上建的**现场数据**，OTA 升级时**板上优先**保留；动作脚本相反按包里的结算
-  —— 所以调参要改卡片配置，**别改 `demo/*.lua`**。
+- 卡片是用户在板上建的现场数据，OTA 升级时板上优先保留；`demo/*.json` 动作默认配置按包替换。
+  持久调参放在卡片中，数值、脉冲时长、夹爪偏移等无需重新编译。
+
+配置格式、全部字段和移植边界见 [Demo 配置说明](cpp/board/demo/README.md)。
+状态机核心不依赖线程或设备 I/O；整体移植到其他操作系统仍需适配平台和硬件接口。
 
 ### 速度配置 / WiFi / OTA / 系统
 

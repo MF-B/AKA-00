@@ -2,11 +2,25 @@
 # csrc — 交叉编译 Makefile（SG2002 / riscv64 musl 静态库）
 #
 # 用法:
-#   make -f Makefile.cross                        # 用默认工具链
+#   make -f Makefile.cross                        # 自动探测工具链（scripts/find-toolchain.sh）
+#   make -f Makefile.cross TOOLCHAIN_PREFIX=/path/to/bin/riscv64-unknown-linux-musl-
 #   make -f Makefile.cross CXX=/path/to/riscv64-unknown-linux-musl-g++
 #
 # JPEG_DIR 指向 libjpeg 安装前缀（含 include/ 与 lib/，由 scripts/build-libjpeg.sh 生成）
 # =============================================================================
+
+# 显式前缀优先；只指定 CXX 时从交叉 g++ 推导前缀，其余情况自动探测。
+# 环境中的 CXX 不用于推导，避免登录 shell 导出的本机 g++ 混入交叉构建。
+CROSS_SCRIPTS := $(dir $(lastword $(MAKEFILE_LIST)))../scripts
+ifeq ($(origin TOOLCHAIN_PREFIX),undefined)
+ifeq ($(origin CXX),command line)
+TOOLCHAIN_PREFIX := $(patsubst %g++,%,$(CXX))
+endif
+endif
+override TOOLCHAIN_PREFIX := $(shell TOOLCHAIN_PREFIX='$(TOOLCHAIN_PREFIX)' sh $(CROSS_SCRIPTS)/find-toolchain.sh)
+ifeq ($(TOOLCHAIN_PREFIX),)
+$(error 找不到 riscv64-unknown-linux-musl 交叉工具链：设 TOOLCHAIN_PREFIX=/path/to/bin/riscv64-unknown-linux-musl-，见 ../scripts/find-toolchain.sh)
+endif
 
 # 带屏 / 不带屏两个变体：
 #   WITH_SCREEN=1（默认）→ build-cross/libcsrc.a          含屏显示（screen_display）
@@ -23,10 +37,14 @@ endif
 # ── TPU 推理（cviruntime）──
 #   WITH_TPU=1（默认）→ 编入 YoloDetector（真实现），需要板子的 TPU SDK
 #   WITH_TPU=0         → 只留桩（与开发机一致）
-# SDK 不在仓库里（也不 vendor 头文件），靠这个变量指过去；换机器只改这一个路径。
-WITH_TPU    ?= 1
-TPU_SDK_DIR ?= /home/junbo_dai/cvitek_tpu_sdk
+# SDK 不在仓库里（也不 vendor 头文件）：命令行/环境给 TPU_SDK_DIR 就用它，否则用
+# ../scripts/find-tpu-sdk.sh 探测（候选见该脚本）。
+WITH_TPU ?= 1
 ifeq ($(WITH_TPU),1)
+override TPU_SDK_DIR := $(shell TPU_SDK_DIR='$(TPU_SDK_DIR)' sh $(CROSS_SCRIPTS)/find-tpu-sdk.sh)
+ifeq ($(TPU_SDK_DIR),)
+$(error 找不到 CVITEK TPU SDK（$(TPU_SDK_DIR)）：设 TPU_SDK_DIR=/path/to/tpu-sdk-sg200x，或 WITH_TPU=0 只编桩，见 ../scripts/find-tpu-sdk.sh)
+endif
 TPU_DEF := -DAKA_WITH_TPU=1
 TPU_INC := -I$(TPU_SDK_DIR)/include
 else
@@ -35,8 +53,8 @@ TPU_INC :=
 endif
 
 # 注意用 := 覆盖环境变量（orb 登录 shell 常导出 CXX=g++ 之类，会污染交叉编译）
-CXX      := /home/junbo_dai/riscv64-linux-musl-x86_64/bin/riscv64-unknown-linux-musl-g++
-AR       := /home/junbo_dai/riscv64-linux-musl-x86_64/bin/riscv64-unknown-linux-musl-ar
+CXX      := $(TOOLCHAIN_PREFIX)g++
+AR       := $(TOOLCHAIN_PREFIX)ar
 JPEG_DIR ?= ../third_party/jpeg
 # mbedtls：https_client.cpp（客户端 TLS）要头文件。库由 capp 链接（-lmbedtls ...），
 # 静态库里留未定义符号没问题 —— 这里只需要 include 路径。

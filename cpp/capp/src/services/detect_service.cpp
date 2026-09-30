@@ -1,7 +1,7 @@
 // 单帧推理服务
 //
 // 由 capp/src/services.cpp 按域拆出来（对应 app/services/*.py 的分法）。
-// 取当前帧跑一次模型（GET /api/detect 与脚本的 detect() 共用）。
+// 取当前帧跑一次模型（GET /api/detect 与 Demo 执行器共用）。
 // 声明都在 capp/context.hpp（那一份是按域分节的伞头文件，调用方只 include 它）。
 
 #include "capp/context.hpp"
@@ -14,7 +14,7 @@
 
 namespace capp {
 
-/// 取一帧跑一次推理 → 框列表（原图像素坐标）。`/api/detect` 与脚本原语共用同一条链：
+/// 取一帧跑一次推理 → 框列表（原图像素坐标）。`/api/detect` 与 Demo 共用同一条链：
 /// 模型懒加载 / 文件变了重载 / 取原生帧 / 推理。错误串与对外契约保持一致。
 bool detect_boxes(AppContext& ctx, const std::string& model_name, const csrc::DecodeOptions& opt,
                   std::vector<csrc::Detection>& out, int& frame_w, std::string& err) {

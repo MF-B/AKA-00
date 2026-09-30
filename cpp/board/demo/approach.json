@@ -1,0 +1,28 @@
+{
+  "name": "接近瞄准",
+  "type": "track",
+  "on_arrival": "stop",
+  "params": {
+    "target_size": 300,
+    "speed": 25,
+    "turn_speed": 25,
+    "center_margin": 80,
+    "align_margin": 25,
+    "grab_offset": 50,
+    "turn_pulse_k": 0.5,
+    "turn_pulse_min": 300,
+    "turn_pulse_max": 400,
+    "fine_pulse_max": 500,
+    "forward_pulse_ms": 600,
+    "too_close_k": 1.5,
+    "back_pulse_k": 2.0,
+    "back_pulse_min": 300,
+    "back_pulse_max": 700,
+    "lost_ms": 1500,
+    "loop_gap_ms": 30,
+    "grab_wait_ms": 4000,
+    "round_gap_ms": 200,
+    "conf": 0.25,
+    "iou": 0.45
+  }
+}

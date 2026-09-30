@@ -4,6 +4,7 @@
 // 供 demo.cpp（跑卡片）与 models.cpp（删模型时报“哪些卡片在用”）共用。
 
 #include "routes_internal.hpp"
+#include "capp/demo_config.hpp"
 
 #include <algorithm>
 #include <dirent.h>
@@ -37,12 +38,8 @@ bool load_demo_card(AppContext& ctx, const std::string& name, DemoCard& out) {
     out.name = name;
     out.action = one.gets("action");
     out.model = one.gets("model");
-    out.params = csrc::Json();
-    out.params["target_size"] = csrc::Json((int64_t)one.geti("target_size", kDemoTargetSizeDefault));
-    out.params["speed"] = csrc::Json((int64_t)one.geti("speed", kDemoSpeedDefault));
-    out.params["turn_speed"] = csrc::Json((int64_t)one.geti("turn_speed", kDemoTurnSpeedDefault));
-    const std::string mode = one.gets("mode");
-    out.params["mode"] = (mode == "loop") ? "loop" : "once";
+    out.params = demo_params_only(one);
+    if (!out.params.has("mode")) out.params["mode"] = "once";
     return !out.action.empty() && !out.model.empty();
 }
 
@@ -70,13 +67,10 @@ bool save_demo_card(AppContext& ctx, const std::string& name, const std::string&
     if (!valid_card_name(name)) return false;
     // demo/configs/ 可能还不存在（板上第一次建卡时），而 ofstream 不会建目录
     if (!csrc::ensure_dir(demo_config_dir(ctx))) return false;
-    csrc::Json one;
+    csrc::Json one = demo_params_only(params);
     one["action"] = action;
     one["model"] = model;
-    one["target_size"] = csrc::Json((int64_t)params.geti("target_size", kDemoTargetSizeDefault));
-    one["speed"] = csrc::Json((int64_t)params.geti("speed", kDemoSpeedDefault));
-    one["turn_speed"] = csrc::Json((int64_t)params.geti("turn_speed", kDemoTurnSpeedDefault));
-    one["mode"] = (params.gets("mode") == "loop") ? "loop" : "once";
+    if (!one.has("mode")) one["mode"] = "once";
     std::ofstream f(demo_config_path(ctx, name));
     if (!f) return false;
     f << one.dump(false);
@@ -84,8 +78,7 @@ bool save_demo_card(AppContext& ctx, const std::string& name, const std::string&
     return (bool)f;
 }
 
-/// 动作清单：扫 demo/<动作>.lua（`_` 开头的跳过 —— 那是模板/草稿，不是一个动作）。
-/// 显示名取脚本第一行的约定注释 `-- name: 接近瞄准`；没有就用文件名。
+/// 动作清单：扫 demo/<动作>.json，列出校验通过的 track 配置。
 std::vector<ActionInfo> list_actions(AppContext& ctx) {
     std::vector<ActionInfo> out;
     const std::string dir = ctx.app_dir + "/demo";
@@ -93,26 +86,13 @@ std::vector<ActionInfo> list_actions(AppContext& ctx) {
     if (!d) return out;
     while (struct dirent* e = readdir(d)) {
         const std::string n = e->d_name;
-        if (n.size() <= 4 || n.compare(n.size() - 4, 4, ".lua") != 0) continue;
+        if (n.size() <= 5 || n.compare(n.size() - 5, 5, ".json") != 0) continue;
         if (n[0] == '_') continue;                        // 下划线开头的是模板/草稿，不算一个动作
-        const std::string id = n.substr(0, n.size() - 4);
+        const std::string id = n.substr(0, n.size() - 5);
         if (!valid_model_name(id)) continue;              // 动作名要能拼进路径
-        ActionInfo a;
-        a.id = id;
-        a.name = id;
-        std::ifstream f(dir + "/" + n);
-        std::string first;
-        if (f && std::getline(f, first)) {
-            const std::string key = "name:";
-            const size_t at = first.find(key);
-            if (at != std::string::npos) {
-                std::string label = first.substr(at + key.size());
-                const size_t b = label.find_first_not_of(" \t");
-                const size_t e2 = label.find_last_not_of(" \t\r");
-                if (b != std::string::npos) a.name = label.substr(b, e2 - b + 1);
-            }
-        }
-        out.push_back(a);
+        DemoActionConfig config;
+        std::string error;
+        if (load_demo_action(ctx, id, config, error)) out.push_back({id, config.name});
     }
     closedir(d);
     std::sort(out.begin(), out.end(),

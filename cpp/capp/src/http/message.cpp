@@ -5,6 +5,7 @@
 
 #include "capp/http_server.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 

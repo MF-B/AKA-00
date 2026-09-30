@@ -8,6 +8,7 @@
 #include "capp/context.hpp"   // AppContext（handle_connection 里要用它的完整类型）
 
 #include "csrc/log.hpp"
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
