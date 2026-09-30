@@ -30,6 +30,17 @@ cd frontend && npm run dev
 
 ## 打包
 
+新 x86_64 Linux 推荐在仓库根执行：
+
+```bash
+./scripts/setup-build.sh --install-system-deps
+./scripts/build.sh --screen      # 自动构建前端和后端，生成安装器
+./scripts/build.sh --noscreen    # --all 可依次生成两种版本
+```
+
+初始化支持 apt/dnf，固定依赖放在 `.build-env/`，无需其他项目或全局 Node 配置。
+完整准备、缓存及构建说明见仓库根的 `docs/build.md`。
+
 正式构建统一走 `cpp/Makefile`（在 orb 里直接跑；在 macOS 上会自动经 `orb run` 转发
 交叉编译）：
 

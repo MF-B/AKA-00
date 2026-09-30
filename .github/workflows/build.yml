@@ -1,0 +1,83 @@
+name: Build SG2002 installers
+
+on:
+  push:
+    paths:
+      - 'scripts/**'
+      - 'cpp/**'
+      - 'frontend/**'
+      - 'tests/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/build.yml'
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - 'cpp/**'
+      - 'frontend/**'
+      - 'tests/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        variant: [screen, noscreen]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache fixed build dependencies
+        uses: actions/cache@v4
+        with:
+          path: .build-env
+          key: aka-linux-amd64-${{ hashFiles('scripts/build-versions.env') }}
+      - name: Prepare native environment
+        run: ./scripts/setup-build.sh --install-system-deps
+      - name: Verify environment
+        run: ./scripts/setup-build.sh --check
+      - name: Demo regression tests
+        run: make -C cpp/capp test-demo
+      - name: Build installer
+        run: ./scripts/build.sh --${{ matrix.variant }} -j 4
+      - name: Upload installer and manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: aka-00-${{ matrix.variant }}
+          path: |
+            cpp/dist*/aka-00-server
+            cpp/dist*/build-manifest.txt
+          if-no-files-found: error
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build both installers in Docker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          target: artifacts
+          build-args: |
+            VARIANT=all
+            JOBS=4
+            SOURCE_COMMIT=${{ github.sha }}
+            SOURCE_DIRTY=0
+          outputs: type=local,dest=output/docker
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Upload Docker installers and manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: aka-00-docker
+          path: |
+            output/docker/*/aka-00-server
+            output/docker/*/build-manifest.txt
+          if-no-files-found: error

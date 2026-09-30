@@ -72,12 +72,12 @@ mbedtls: $(MBEDTLS)
 csrc: $(CSRC_LIB)
 capp: $(CAPP_BIN)
 tools: $(CSRC_LIB)
-	$(ORB_RUN) "cd $(CPP)/csrc && make -f Makefile.cross WITH_SCREEN=1 tools"
+	+$(ORB_RUN) "cd $(CPP)/csrc && $(MAKE) -f Makefile.cross WITH_SCREEN=1 tools"
 
 csrc-noscreen: $(CSRC_LIB_NS)
 capp-noscreen: $(CAPP_BIN_NS)
 tools-noscreen: $(CSRC_LIB_NS)
-	$(ORB_RUN) "cd $(CPP)/csrc && make -f Makefile.cross WITH_SCREEN=0 tools"
+	+$(ORB_RUN) "cd $(CPP)/csrc && $(MAKE) -f Makefile.cross WITH_SCREEN=0 tools"
 
 # 独立板测 demo（tests/ 下的单文件 C 程序：摄像头 → 屏 闭环；与 capp 无关，
 # 现场排障用：DEMO_TEST=1 验颜色/方向、DEMO_BENCH=1 验写屏带宽、裸跑看 fps/耗时）。
@@ -87,15 +87,14 @@ DEMO_BINS := $(DEMO_DIR)/demo_camera $(DEMO_DIR)/demo_image
 
 demos: $(DEMO_BINS)
 
-$(DEMO_BINS): $(ROOT)/tests/demo_camera.c $(ROOT)/tests/demo_image.c $(JPEG)
+# 每个目标只编译自己的源文件，避免 -j 下两份配方同时写同一批二进制。
+$(DEMO_DIR)/%: $(ROOT)/tests/%.c $(JPEG)
 	$(ORB_RUN) 'set -e; \
 	    PREFIX=$$(sh $(CPP)/scripts/find-toolchain.sh); \
 	    mkdir -p $(DEMO_DIR); \
-	    $${PREFIX}gcc -O2 -Wall -static -o $(DEMO_DIR)/demo_camera \
-	        $(ROOT)/tests/demo_camera.c -I$(CPP)/third_party/jpeg/include $(JPEG); \
-	    $${PREFIX}gcc -O2 -Wall -static -o $(DEMO_DIR)/demo_image \
-	        $(ROOT)/tests/demo_image.c -I$(CPP)/third_party/jpeg/include $(JPEG); \
-	    echo "  ✓ 板测 demo: demo_camera / demo_image"'
+	    $${PREFIX}gcc -O2 -Wall -static -o $@ \
+	        $< -I$(CPP)/third_party/jpeg/include $(JPEG); \
+	    echo "  ✓ 板测 demo: $(@F)"'
 
 $(JPEG):
 	$(ORB_RUN) "cd $(CPP)/scripts && ./build-libjpeg.sh"
@@ -107,19 +106,19 @@ $(MBEDTLS):
 # mbedtls 是编译期依赖（https_client.cpp 要 mbedtls/*.h）——首次构建时必须先建库，
 # 否则在全新目录上 csrc 会先于 mbedtls 编译而报 "mbedtls/ctr_drbg.h: No such file"。
 $(CSRC_LIB): $(JPEG) $(MBEDTLS) FORCE
-	$(ORB_RUN) "cd $(CPP)/csrc && make -f Makefile.cross WITH_SCREEN=1"
+	+$(ORB_RUN) "cd $(CPP)/csrc && $(MAKE) -f Makefile.cross WITH_SCREEN=1"
 
 $(CSRC_LIB_NS): $(JPEG) $(MBEDTLS) FORCE
-	$(ORB_RUN) "cd $(CPP)/csrc && make -f Makefile.cross WITH_SCREEN=0"
+	+$(ORB_RUN) "cd $(CPP)/csrc && $(MAKE) -f Makefile.cross WITH_SCREEN=0"
 
 # FORCE: bin/aka-capp* 可能被本机 make（host 版）覆盖成非 RISC-V 二进制，
 # make 只看 mtime 会误判为最新。每次都跑交叉编译（内部增量，秒级），
 # 确保部署产物永远是 riscv64 静态版。
 $(CAPP_BIN): $(CSRC_LIB) $(MBEDTLS) FORCE
-	$(ORB_RUN) "cd $(CPP)/capp && make -f Makefile.cross WITH_SCREEN=1"
+	+$(ORB_RUN) "cd $(CPP)/capp && $(MAKE) -f Makefile.cross WITH_SCREEN=1"
 
 $(CAPP_BIN_NS): $(CSRC_LIB_NS) $(MBEDTLS) FORCE
-	$(ORB_RUN) "cd $(CPP)/capp && make -f Makefile.cross WITH_SCREEN=0"
+	+$(ORB_RUN) "cd $(CPP)/capp && $(MAKE) -f Makefile.cross WITH_SCREEN=0"
 
 # ── 打包 ──
 # 板上要什么是**实体文件**说了算：`cpp/board/` 就是 `$AKA_HOME/` 的镜像，

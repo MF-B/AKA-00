@@ -17,6 +17,8 @@ set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$HERE/../third_party/jpeg"
 WORK="$HERE/../third_party/build-jpeg"
+# shellcheck source=../../scripts/build-versions.env
+. "$HERE/../../scripts/build-versions.env"
 
 # 工具链：校验并归一化显式前缀，未设时自动探测。
 TOOLCHAIN_PREFIX="$(sh "$HERE/find-toolchain.sh")" || exit 1
@@ -24,7 +26,7 @@ CC="${TOOLCHAIN_PREFIX}gcc"
 AR="${TOOLCHAIN_PREFIX}ar"
 
 # 源包：优先命令行参数 / 本地缓存，否则下载 ijg.org
-TARBALL="${1:-}"
+TARBALL="${1:-${AKA_JPEG_ARCHIVE:-}}"
 if [ -z "$TARBALL" ]; then
     for cand in \
         "$HOME/dl/jpegsrc.v9f.tar.gz" \
@@ -36,8 +38,10 @@ if [ -z "$TARBALL" ]; then
     echo "[libjpeg] downloading jpegsrc.v9f.tar.gz ..."
     TARBALL="$HERE/../third_party/jpegsrc.v9f.tar.gz"
     mkdir -p "$HERE/../third_party"
-    curl -fL -o "$TARBALL" https://ijg.org/files/jpegsrc.v9f.tar.gz
+    curl -fL --retry 3 -o "$TARBALL.part" "$AKA_JPEG_URL"
+    mv "$TARBALL.part" "$TARBALL"
 fi
+printf '%s  %s\n' "$AKA_JPEG_SHA256" "$TARBALL" | sha256sum -c - || exit 1
 
 mkdir -p "$WORK" "$OUT" "$HERE/../third_party"
 rm -rf "$WORK/src"
@@ -53,7 +57,7 @@ echo "[libjpeg] configuring for riscv64 musl (static)..."
     CFLAGS="-O3 -mcpu=c906fdv -mabi=lp64d"
 
 echo "[libjpeg] building..."
-make -j"$(nproc)" >/dev/null
+make -j"${AKA_BUILD_JOBS:-$(nproc)}" >/dev/null
 make install >/dev/null
 
 echo "[libjpeg] ✓ $OUT/lib/libjpeg.a"

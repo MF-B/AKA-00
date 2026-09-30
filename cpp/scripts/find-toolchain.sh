@@ -7,12 +7,13 @@
 #
 # 查找顺序（先命中先用；候选须有可执行的 <prefix>gcc/g++/ar）：
 #   1. $TOOLCHAIN_PREFIX        显式指定（环境变量或 make 变量；无效直接报错）
-#   2. PATH 里已有的 riscv64-unknown-linux-musl-gcc
-#   3. $AKARS_TOOLCHAIN_DIR     chenlongos/akars 自带工具链目录
-#   4. $HOME/code/*/toolchains/*/、$HOME/code/*/*/toolchains/*/   同机 SDK 仓库
-#   5. $HOME/toolchains/*/、$HOME/toolchains/*/*/
-#   6. /opt/、/usr/local/、$HOME 下的 riscv64-linux-musl-x86_64
-#   7. /home/junbo_dai/riscv64-linux-musl-x86_64/   原始开发机 orb 内默认路径
+#   2. 项目 .build-env/（由 scripts/setup-build.sh 准备）
+#   3. PATH 里已有的 riscv64-unknown-linux-musl-gcc
+#   4. $AKARS_TOOLCHAIN_DIR     chenlongos/akars 自带工具链目录
+#   5. $HOME/code/*/toolchains/*/、$HOME/code/*/*/toolchains/*/   同机 SDK 仓库
+#   6. $HOME/toolchains/*/、$HOME/toolchains/*/*/
+#   7. /opt/、/usr/local/、$HOME 下的 riscv64-linux-musl-x86_64
+#   8. /home/junbo_dai/riscv64-linux-musl-x86_64/   原始开发机 orb 内默认路径
 #
 # 候选必须同时有 gcc/g++/ar。全找不到时 stderr 列出路径并 exit 1，不退回本机 g++。
 #
@@ -20,6 +21,11 @@
 # （如 akars/toolchains/xuantie-v3.4.0）满足，musl.cc 的通用 GCC 不支持该 -mcpu。
 # =============================================================================
 set -eu
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=../../scripts/build-versions.env
+. "$ROOT/scripts/build-versions.env"
+BUILD_ENV="${AKA_BUILD_ENV_DIR:-$ROOT/.build-env}"
+case "$BUILD_ENV" in /*) ;; *) BUILD_ENV="$ROOT/$BUILD_ENV" ;; esac
 
 SEARCHED=""
 
@@ -78,14 +84,17 @@ if [ -n "${TOOLCHAIN_PREFIX:-}" ]; then
     exit 1
 fi
 
-# 2. PATH
+# 项目管理的固定版本优先于开发机上自动搜索的候选。
+try "$BUILD_ENV/$AKA_TOOLCHAIN_NAME" "项目构建环境 " || true
+
+# PATH
 cc_path="$(command -v riscv64-unknown-linux-musl-gcc 2>/dev/null || true)"
 [ -z "$cc_path" ] || try "${cc_path%gcc}" "PATH 中的 " || true
 
-# 3. akars
+# akars
 [ -z "${AKARS_TOOLCHAIN_DIR:-}" ] || try "$AKARS_TOOLCHAIN_DIR" "AKARS_TOOLCHAIN_DIR=" || true
 
-# 4-7. 同机 SDK 仓库与常见安装位置
+# 同机 SDK 仓库与常见安装位置
 for d in \
     "$HOME"/code/*/toolchains/*/ \
     "$HOME"/code/*/*/toolchains/*/ \

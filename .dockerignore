@@ -1,0 +1,23 @@
+# 只发送构建所需源码，排除个人文件、系统镜像、下载缓存及旧产物。
+**
+!Dockerfile
+!.dockerignore
+!scripts/
+!scripts/**
+!cpp/
+!cpp/**
+!frontend/
+!frontend/**
+!tests/
+!tests/demo_camera.c
+!tests/demo_image.c
+cpp/csrc/build/
+cpp/csrc/build-*/
+cpp/capp/build/
+cpp/capp/build-*/
+cpp/capp/bin/
+cpp/third_party/
+cpp/dist/
+cpp/dist-noscreen/
+frontend/node_modules/
+frontend/*.tsbuildinfo

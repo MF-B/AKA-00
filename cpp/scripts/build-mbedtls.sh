@@ -21,7 +21,8 @@ set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$HERE/../third_party/mbedtls"
 WORK="$HERE/../third_party/build-mbedtls"
-VERSION="3.6.7"
+# shellcheck source=../../scripts/build-versions.env
+. "$HERE/../../scripts/build-versions.env"
 
 # 工具链：校验并归一化显式前缀，未设时自动探测。
 TOOLCHAIN_PREFIX="$(sh "$HERE/find-toolchain.sh")" || exit 1
@@ -29,17 +30,25 @@ CC="${TOOLCHAIN_PREFIX}gcc"
 AR="${TOOLCHAIN_PREFIX}ar"
 
 # 源：优先命令行参数（本地目录），否则 git clone
-SRC_DIR="$WORK/src"
-if [ -n "${1:-}" ] && [ -d "$1" ]; then
-    SRC_DIR="$1"
+SRC_DIR="${1:-${AKA_MBEDTLS_SOURCE:-$WORK/src}}"
+if [ -n "${1:-${AKA_MBEDTLS_SOURCE:-}}" ] && [ ! -d "$SRC_DIR" ]; then
+    echo "[mbedtls] 指定的源码目录不存在：$SRC_DIR" >&2
+    exit 1
 fi
 if [ ! -d "$SRC_DIR/framework" ] || [ ! -d "$SRC_DIR/library" ]; then
-    echo "[mbedtls] cloning v${VERSION} (with framework submodule)..."
+    echo "[mbedtls] fetching $AKA_MBEDTLS_COMMIT (with framework submodule)..."
     mkdir -p "$WORK"
     rm -rf "$SRC_DIR"
-    git clone --depth 1 --branch "v${VERSION}" \
-        https://github.com/Mbed-TLS/mbedtls.git "$SRC_DIR" >/dev/null
+    git init -q "$SRC_DIR"
+    git -C "$SRC_DIR" remote add origin "$AKA_MBEDTLS_URL"
+    git -C "$SRC_DIR" fetch --depth 1 origin "$AKA_MBEDTLS_COMMIT"
+    git -C "$SRC_DIR" checkout -q --detach FETCH_HEAD
     ( cd "$SRC_DIR" && git submodule update --init --depth 1 >/dev/null )
+fi
+if [ "$(git -C "$SRC_DIR" rev-parse HEAD)" != "$AKA_MBEDTLS_COMMIT" ] || \
+   [ "$(git -C "$SRC_DIR/framework" rev-parse HEAD)" != "$AKA_MBEDTLS_FRAMEWORK_COMMIT" ]; then
+    echo "[mbedtls] 源码版本不符，需 $AKA_MBEDTLS_COMMIT / framework $AKA_MBEDTLS_FRAMEWORK_COMMIT" >&2
+    exit 1
 fi
 
 rm -rf "$OUT"          # 清旧安装（含历史 lib64/ 布局残渣：Makefile.cross 固定从 <prefix>/lib 取库）
@@ -63,7 +72,7 @@ cmake "$SRC_DIR" \
     >/dev/null
 
 echo "[mbedtls] building..."
-make -j"$(nproc)" >/dev/null
+make -j"${AKA_BUILD_JOBS:-$(nproc)}" >/dev/null
 make install >/dev/null
 
 echo "[mbedtls] ✓ $OUT/lib/libmbed{tls,crypto,x509}.a"

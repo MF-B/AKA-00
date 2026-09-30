@@ -49,6 +49,19 @@ QQ群：901307286
 `cpp/` 是整个软件的实体：交叉编译成 riscv64 静态二进制 `aka-capp`（无任何运行时依赖），
 再把配置、前端页面、demo 一起收成**一个自解压安装器**，拷到板子上就能装。
 
+全新 x86_64 Linux 上先准备环境，再使用统一入口构建（系统依赖支持 apt/dnf）：
+
+```bash
+./scripts/setup-build.sh --install-system-deps
+./scripts/build.sh --screen       # 前端 + 后端 + 安装器
+./scripts/build.sh --noscreen     # 无屏版；--all 依次构建两种版本
+```
+
+工具链、TPU SDK 和 Node 固定版本安装在 Git 忽略的 `.build-env/`，不依赖其他项目。
+也可以只安装 Docker，执行 `./scripts/build-docker.sh --screen`（或 `--noscreen` / `--all`），
+产物写入 `output/docker/`。详见[构建说明](docs/build.md)。
+下面是已有环境可用的底层 Makefile 目标：
+
 ```bash
 cd cpp
 make              # 一条龙：libjpeg/mbedtls → csrc → capp → package → ota
@@ -68,7 +81,7 @@ make clean        # 清理全部构建产物
 **构建环境**：交叉编译需要 riscv64-unknown-linux-musl 工具链。在 orb（Linux）里直接
 `make`；在 macOS 上 `make` 会自动经 `orb run` 转发交叉编译，产物落在共享目录，两边路径一致。
 
-**前端不参与 make**：`make package` 直接拿仓库根 `static/` 里已构建好的前端产物打包，
+**直接使用 make 时前端不参与构建**：`make package` 直接拿仓库根 `static/` 里已构建好的前端产物打包，
 所以**改了前端要自己先 build**，而且版本要和包对上（拿错版本打包脚本会告警）：
 
 ```bash

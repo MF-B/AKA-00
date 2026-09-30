@@ -7,6 +7,13 @@ checkpoints/
 dist/
 .DS_Store
 
+# 本地系统镜像（不随源码提交）
+/images/firmware/
+
+# 原生构建环境与下载缓存
+/.build-env/
+/.build-env.lock
+
 # cpp build artifacts（含 noscreen 变体的独立构建目录/产物）
 cpp/csrc/build/
 cpp/csrc/build-noscreen/

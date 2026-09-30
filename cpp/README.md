@@ -59,7 +59,8 @@ cpp/
 
 ## 前端页面如何组合
 
-前端不参与构建流程 —— 直接使用仓库根 `static/`（已构建好的产物）：
+根目录 `scripts/build.sh` 会先构建前端，再调用 Makefile；直接调用 Makefile 时使用
+仓库根 `static/` 的已有产物：
 
 ```text
 static/ (index.html + assets/)  --打包-->  板上 $AKA_HOME/static/
@@ -89,6 +90,19 @@ static/ (index.html + assets/)  --打包-->  板上 $AKA_HOME/static/
 - 页面与 capp 的接口契约（REST + WS 二进制协议）见下节
 
 ## 构建
+
+### 新 Linux 的统一入口
+
+在仓库根执行（x86_64 Linux，系统依赖支持 apt/dnf）：
+
+```sh
+./scripts/setup-build.sh --install-system-deps
+./scripts/build.sh --screen
+./scripts/build.sh --noscreen    # 或 --all 依次生成两种版本
+```
+
+初始化下载并校验固定版本的 Xuantie、TPU SDK、Node 和第三方源码到 `.build-env/`，
+统一入口自动匹配前后端版本并打包。完整说明见 [docs/build.md](../docs/build.md)。
 
 ### 用 make 构建（Linux / orb / macOS 通用）
 
@@ -140,7 +154,7 @@ make clean                # 清理全部构建产物
   （构建用 `-mcpu=c906fdv`）：Xuantie 官方 toolchain（如
   `akars/toolchains/xuantie-v3.4.0`）满足；musl.cc 的通用 GCC 不支持该 `-mcpu`，会编译报错
 - 工具链位置由 `cpp/scripts/find-toolchain.sh` 自动探测，顺序：
-  `$TOOLCHAIN_PREFIX` → PATH 里的 `riscv64-unknown-linux-musl-gcc` →
+  `$TOOLCHAIN_PREFIX` → 项目 `.build-env/` → PATH 里的 `riscv64-unknown-linux-musl-gcc` →
   `$AKARS_TOOLCHAIN_DIR` → `~/code/*/toolchains/*/`、`~/code/*/*/toolchains/*/`
   （含 `~/code/company/akars/toolchains/`）、`~/toolchains/*/` →
   `/opt`、`/usr/local`、`~` 下的 `riscv64-linux-musl-x86_64` →
@@ -152,10 +166,10 @@ make clean                # 清理全部构建产物
   `make -f Makefile.cross CXX=/path/to/riscv64-unknown-linux-musl-g++`，由该路径推导配套工具；
   环境中导出的本机 `CXX=g++` 会被忽略
 - **TPU SDK**（`cviruntime`，板上跑 YOLO 用，仓库里不 vendor）同样自动探测，见
-  `cpp/scripts/find-tpu-sdk.sh`（`$TPU_SDK_DIR` → `akars/toolchains/tpu-sdk-sg200x` →
+  `cpp/scripts/find-tpu-sdk.sh`（`$TPU_SDK_DIR` → 项目 `.build-env/` → `akars/toolchains/tpu-sdk-sg200x` →
   `~/code/*/toolchains/...`、`~/code/*/*/toolchains/...` →
   `/opt`、`~` → `/home/junbo_dai/cvitek_tpu_sdk`）。
-  SDK 须包含 `include/cviruntime.h` 和 `lib/libcviruntime-static.a`。
+  SDK 须包含 `include/cviruntime.h` 和 cviruntime/cvikernel/cvimath/z 四份静态库。
   默认 `WITH_TPU=1`（板子要真推理）；找不到 SDK 时**明确报错**而不是悄悄编桩，
   只编桩时显式 `make WITH_TPU=0`（这样出来的包在板上不做识别）
 - `capp` 目标带 FORCE：每次重跑交叉编译（内部增量，秒级），防止 `bin/aka-capp`
@@ -218,15 +232,16 @@ $AKA_HOME/
 
 ```sh
 # 方式 A：自解压安装器（推荐；权限位自带，换包是"staging + 目录改名"，失败有 .old 回滚点）
-scp cpp/dist/aka-00-server root@<板子IP>:/tmp/
-ssh root@<板子IP> 'chmod +x /tmp/aka-00-server && /tmp/aka-00-server --update'
+scp -O cpp/dist/aka-00-server root@<板子IP>:/root/
+ssh root@<板子IP> 'chmod +x /root/aka-00-server'
+ssh root@<板子IP> 'setsid /root/aka-00-server --update >/root/ota.log 2>&1 </dev/null &'
 #   ⚠ --update 默认**保留**板上的 config.toml / speed_config.json / arm_angles.json：
 #     想让本次带的默认配置（如 [display] scale=1 全屏）生效，要么
-#     AKA_OTA_RESET_CONFIG=1 /tmp/aka-00-server --update，要么部署后手改 config.toml。
+#     AKA_OTA_RESET_CONFIG=1 /root/aka-00-server --update，要么部署后手改 config.toml。
 #   首次部署用 --init；只解包不重启用 --extract。
 
 # 方式 B：整目录（scp -r 不保留可执行位，但 init.sh 有兜底 chmod）
-scp -r cpp/dist/AKA-00 root@<板子IP>:~/AKA-00
+scp -O -r cpp/dist/AKA-00 root@<板子IP>:~/AKA-00
 ```
 
 > 注意：OpenSSH 的 `scp -r` 默认**不保留可执行位**，传完可能出现

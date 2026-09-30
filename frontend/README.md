@@ -1,6 +1,11 @@
 # 小车前端
 
 ## 1. 打包命令
+
+完整发布包推荐在仓库根运行 `./scripts/build.sh --screen` / `--noscreen`，
+它会使用项目固定的 Node 版本，自动安装前端依赖、构建网页并编译打包后端。
+首次环境准备见 [docs/build.md](../docs/build.md)。
+
 可以前端静态打包，方便后端直接调用
 ```shell
 npm run build            # 带屏版（设置页有"屏幕显示"开关）
