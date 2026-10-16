@@ -3,6 +3,7 @@
 // 由 capp/src/http_server.cpp 拆出来（声明都还在 capp/http_server.hpp，类没变）。
 // 请求解析后的读取辅助（header/query/json 取值）、响应的三种 set_*、以及 URL 解码、MIME、读文件这些小工具。
 
+#include <algorithm>
 #include "capp/http_server.hpp"
 
 #include <fstream>
