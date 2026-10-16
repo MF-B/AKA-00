@@ -87,3 +87,15 @@ $(TARGET): $(OBJS) $(CSRC_LIB)
 
 clean:
 	rm -rf build build-noscreen bin
+
+# Exercise the real Lua host, including its instruction hook.
+TESTDIR := build-tests
+.PHONY: test-lua
+test-lua: $(TESTDIR)/test_lua
+	@$(TESTDIR)/test_lua
+
+$(TESTDIR):
+	mkdir -p $@
+
+$(TESTDIR)/test_lua: tests/test_lua.cpp $(filter-out $(OBJDIR)/main.o,$(OBJS)) $(CSRC_LIB) | $(TESTDIR)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(MBEDTLS_LIB) $(MBEDTLS_LINK) $(LUA_LIB) $(LUA_LINK) -lm -pthread

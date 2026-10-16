@@ -133,7 +133,7 @@ void keepalive_tick(RunCtx* r) {
 /// 打断判定不在这里做 —— 在 hook 里多做一点事（查底盘状态/记日志/抛错）会让脚本
 /// 随机报空错误，详见下面 hook_tick 里的长注释。
 void hook_tick(lua_State* L, lua_Debug*) {
-    RunCtx* r = (RunCtx*)lua_getextraspace(L);
+    RunCtx* r = *static_cast<RunCtx**>(lua_getextraspace(L));
     if (!r || !r->ctx) return;
     // 这里跑的是**宿主自己的 C++**（保活要写串口、check_interrupt 要查底盘状态）。
     // C++ 异常绝不能被放过去穿 Lua 的 C 栈 —— 那是 UB，实测后果是 Lua 状态被搞坏、
