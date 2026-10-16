@@ -116,8 +116,8 @@ DEMO_BINS := $(DEMO_DIR)/demo_camera $(DEMO_DIR)/demo_image
 
 demos: $(DEMO_BINS)
 
-$(DEMO_BINS): $(ROOT)/tests/demo_camera.c $(ROOT)/tests/demo_image.c $(JPEG)
-	$(ORB_RUN) "set -e; $(if $(strip $(AKA_TOOLCHAIN_DIR)),export PATH=$(AKA_TOOLCHAIN_DIR)bin:\$$PATH;,true); \
+$(DEMO_BINS) &: $(ROOT)/tests/demo_camera.c $(ROOT)/tests/demo_image.c $(JPEG)
+	$(ORB_RUN) "set -e; \
 	    mkdir -p $(DEMO_DIR); \
 	    $(CROSS_CC) -O2 -Wall -static -o $(DEMO_DIR)/demo_camera \
 	        $(ROOT)/tests/demo_camera.c -I$(CPP)/third_party/jpeg/include $(JPEG); \

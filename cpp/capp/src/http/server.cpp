@@ -3,6 +3,7 @@
 // 由 capp/src/http_server.cpp 拆出来（声明都还在 capp/http_server.hpp，类没变）。
 // 一个连接一个线程；请求体上限与超时都在这里。
 
+#include <algorithm>
 #include "capp/http_server.hpp"
 
 #include "capp/context.hpp"   // AppContext（handle_connection 里要用它的完整类型）
